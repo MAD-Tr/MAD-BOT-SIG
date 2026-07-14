@@ -6,8 +6,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, CallbackQueryHandler
 from tradingview_ta import TA_Handler, Interval
 
-TOKEN = os.environ.get('8828337019:AAEaPI6vrMzylIn3KgPBVdk0LgSSV0LwG6M')
-
+TOKEN = os.environ.get('BOT_TOKEN')
 # قائمة الأزواج اللي في الصور حقتك
 PAIRS = [
     "EURUSD", "USDCAD", "USDCHF", "USDJPY",
