@@ -24,6 +24,14 @@ MARKETS = {
 user_data = {}
 last_request = {}
 
+# === الاضافات الاسطورية ===
+GOLD_CONFIDENCE = 90
+SLEEP_THRESHOLD = 55 # اذا كل الفريمات تحت 55 يعني السوق نايم
+
+def check_market_sleep(p5, p15, p1h):
+    # السوق نايم اذا كل الثقات ضعيفة
+    return p5 < SLEEP_THRESHOLD and p15 < SLEEP_THRESHOLD and p1h < SLEEP_THRESHOLD
+
 def get_tf_signal(symbol, interval):
     try:
         h = TA_Handler(symbol=symbol, screener="forex", exchange="FX", interval=interval)
@@ -41,18 +49,21 @@ def get_confluence_signal(symbol):
     d15, p15 = get_tf_signal(symbol, Interval.INTERVAL_15_MINUTES)
     d1h, p1h = get_tf_signal(symbol, Interval.INTERVAL_1_HOUR)
 
-    # لو الثلاثة متفقين = اشارة قوية حقيقية
-    if d5 == d15 == d1h and d5!= "ERROR":
+    # 1. فلتر السوق النايم
+    if check_market_sleep(p5, p15, p1h):
+        return "SLEEP", 0, f"5m:{p5}% | 15m:{p15}% | H1:{p1h}%"
+
+    # 2. تطابق كامل = صفقة اسطورية
+    if d5 == d15 == d1h and d5 not in ["ERROR", "NEUTRAL"]:
         avg_percent = int((p5 + p15 + p1h) / 3)
-        final_percent = min(94, avg_percent + 10) # بوست قوة
+        final_percent = min(94, avg_percent + 12) # بوست اقوى
         return d5, final_percent, f"5m:{p5}% | 15m:{p15}% | H1:{p1h}% - تطابق كامل ✅"
 
-    # لو اثنين متفقين
-    if d5 == d15 and d5!= "ERROR":
+    # 3. تطابق جزئي
+    if d5 == d15 and d5 not in ["ERROR", "NEUTRAL"]:
         avg_percent = int((p5 + p15) / 2)
         return d5, avg_percent, f"5m:{p5}% | 15m:{p15}% | H1:{p1h}% {d1h} - تطابق جزئي ⚠️"
 
-    # غير متفقين
     return "NO_TRADE", 0, f"5m:{d5} {p5}% | 15m:{d15} {p15}% | H1:{d1h} {p1h}% - متضاربة ❌"
 
 @bot.message_handler(commands=['start'])
@@ -60,7 +71,7 @@ def start(msg):
     markup = InlineKeyboardMarkup(row_width=2)
     for name in MARKETS:
         markup.add(InlineKeyboardButton(name, callback_data=f"market_{name}"))
-    bot.send_message(msg.chat.id, "👋 بوت احترافي Triple TF\nاختر السوق:", reply_markup=markup)
+    bot.send_message(msg.chat.id, "👋 البوت الاسطوري Triple TF + فلتر النوم\nاختر السوق:", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("market_"))
 def choose_market(call):
@@ -68,9 +79,9 @@ def choose_market(call):
     name = call.data.replace("market_", "")
     user_data[call.from_user.id] = MARKETS[name], name
     markup = InlineKeyboardMarkup(row_width=1)
-    markup.add(InlineKeyboardButton("🔍 فحص شامل 5m+15m+H1", callback_data="time_ALL"))
-    markup.add(InlineKeyboardButton("5m فقط", callback_data="time_5"), InlineKeyboardButton("15m فقط", callback_data="time_15"))
-    bot.send_message(call.message.chat.id, f"اخترت {name}\nاختر نوع الفحص:", reply_markup=markup)
+    # خليناها زر واحد بس عشان ما تتلخبط - الشامل هو الصح
+    markup.add(InlineKeyboardButton("🔍 فحص اسطوري شامل", callback_data="time_ALL"))
+    bot.send_message(call.message.chat.id, f"اخترت {name}\nاضغط فحص:", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("time_"))
 def choose_time(call):
@@ -82,37 +93,54 @@ def choose_time(call):
     last_request[user_id] = now
     bot.answer_callback_query(call.id)
 
-    mode = call.data.replace("time_", "")
     symbol, name = user_data.get(user_id, (None, None))
     if not symbol: return
 
-    loading = bot.send_message(call.message.chat.id, f"⏳ جاري فحص {name} على 3 فريمات من TradingView...")
+    loading = bot.send_message(call.message.chat.id, f"⏳ جاري الفحص الاسطوري لـ {name}...")
 
-    if mode == "ALL":
-        direction, percent, details = get_confluence_signal(symbol)
+    direction, percent, details = get_confluence_signal(symbol)
 
-        if direction == "NO_TRADE":
-            bot.edit_message_text(f"📊 {name}\n{details}\n\n❌ لا تدخل السوق متضارب", call.message.chat.id, loading.message_id)
-            return
+    if direction == "SLEEP":
+        bot.edit_message_text(f"😴 {name}\n{details}\n\n💤 السوق نايم لا تدخل - انتظر 15 دقيقة", call.message.chat.id, loading.message_id)
+        return
 
-        if percent < 60:
-            bot.edit_message_text(f"📊 {name}\n{details}\n\n⚠️ ثقة ضعيفة {percent}% لا تدخل", call.message.chat.id, loading.message_id)
-            return
+    if direction == "NO_TRADE":
+        bot.edit_message_text(f"📊 {name}\n{details}\n\n❌ لا تدخل السوق متضارب", call.message.chat.id, loading.message_id)
+        return
 
-        emoji = "🟢 BUY صعود" if direction == "BUY" else "🔴 SELL هبوط"
-        bot.edit_message_text(f"📊 {name} - فحص شامل\n{emoji}\n💪 ثقة حقيقية: {percent}%\n\n{details}", call.message.chat.id, loading.message_id)
+    if percent < 60:
+        bot.edit_message_text(f"📊 {name}\n{details}\n\n⚠️ ثقة ضعيفة {percent}% لا تدخل", call.message.chat.id, loading.message_id)
+        return
+
+    # صياغة الرسالة الاسطورية
+    is_gold = percent >= GOLD_CONFIDENCE and "تطابق كامل" in details
+    emoji = "🟢 صعود BUY" if direction == "BUY" else "🔴 هبوط SELL"
+
+    if is_gold:
+        text = f"""🔥🔥🔥 صفقة ذهبية 🔥🔥🔥
+📊 {name}
+
+{emoji}
+💎 الثقة: {percent}%
+{details}
+
+⏰ مدة الصفقة في بوكت اوبشن: 15 دقيقة
+💰 هذي هي ادخل وانت مغمض"""
     else:
-        tf_map = {"5": Interval.INTERVAL_5_MINUTES, "15": Interval.INTERVAL_15_MINUTES}
-        d, p = get_tf_signal(symbol, tf_map[mode])
-        if p < 60:
-            bot.edit_message_text(f"📊 {name} {mode}\n⚠️ {p}% ضعيفة", call.message.chat.id, loading.message_id)
-            return
-        emoji = "🟢 BUY" if d == "BUY" else "🔴 SELL"
-        bot.edit_message_text(f"📊 {name} {mode}\n{emoji}\n💪 {p}%", call.message.chat.id, loading.message_id)
+        text = f"""📊 {name} - فحص شامل
+{emoji}
+💪 الثقة: {percent}%
+
+{details}
+
+⏰ مدة الصفقة: 15 دقيقة
+{"✅ تطابق كامل" if "تطابق كامل" in details else "⚠️ تطابق جزئي - ادخل بحذر"}"""
+
+    bot.edit_message_text(text, call.message.chat.id, loading.message_id)
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Bot is Live!"
+def home(): return "Legendary Bot is Live!"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
