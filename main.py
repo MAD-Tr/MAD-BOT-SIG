@@ -1,3 +1,6 @@
+import os
+import threading
+from flask import Flask
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from tradingview_ta import TA_Handler, Interval
@@ -6,7 +9,6 @@ TOKEN = "8828337019:AAGBSoxz8K-3QjNTGX5OXHIV5og3_wANB58"
 bot = telebot.TeleBot(TOKEN)
 
 MARKETS = {
-    # كل الاسواق الحقيقية
     "🇪🇺/🇺🇸 EUR/USD": "EURUSD",
     "🇬🇧/🇺🇸 GBP/USD": "GBPUSD",
     "🇺🇸/🇯🇵 USD/JPY": "USDJPY",
@@ -29,7 +31,6 @@ MARKETS = {
     "🇨🇦/🇨🇭 CAD/CHF": "CADCHF",
     "🇪🇺/🇳🇿 EUR/NZD": "EURNZD",
     "🇬🇧/🇳🇿 GBP/NZD": "GBPNZD",
-    # 3 OTC فقط
     "🇪🇺/🇺🇸 EUR/USD OTC": "EURUSD",
     "🇬🇧/🇺🇸 GBP/USD OTC": "GBPUSD",
     "🇺🇸/🇯🇵 USD/JPY OTC": "USDJPY"
@@ -69,8 +70,19 @@ def choose_time(call):
     bot.send_message(call.message.chat.id, f"⏳ جاري سحب اشارة {name} {tf} من TradingView...")
     direction, percent = get_signal(symbol, tf)
     emoji = "🟢" if direction == "BUY" else "🔴"
-    markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton(f"قوة الاشارة: {percent}%", callback_data="x"))
-    bot.send_message(call.message.chat.id, f"📊 {name} {tf}\n{emoji} {direction}\n💪 {percent}%", reply_markup=markup)
+    bot.send_message(call.message.chat.id, f"📊 {name} {tf}\n{emoji} {direction}\n💪 {percent}%")
 
-bot.polling()
+# --- هذا الجزء المهم لـ Render ---
+app = Flask(__name__)
+@app.route('/')
+def home():
+    return "Bot is Running!"
+
+def run_bot():
+    bot.infinity_polling()
+
+threading.Thread(target=run_bot).start()
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
