@@ -1,144 +1,76 @@
-import os
-import asyncio
-from flask import Flask
-from threading import Thread
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
+import telebot
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from tradingview_ta import TA_Handler, Interval
 
-TOKEN = os.environ.get('BOT_TOKEN')
+TOKEN = "8828337019:AAGBSoxz8K-3QjNTGX5OXHIV5og3_wANB58"
+bot = telebot.TeleBot(TOKEN)
 
 MARKETS = {
-    "EURUSD": "🇪🇺 EUR/USD 🇺🇸",
-    "USDCAD": "🇺🇸 USD/CAD 🇨🇦",
-    "USDCHF": "🇺🇸 USD/CHF 🇨🇭",
-    "USDJPY": "🇺🇸 USD/JPY 🇯🇵",
-    "EURJPY": "🇪🇺 EUR/JPY 🇯🇵",
-    "AUDCAD": "🇦🇺 AUD/CAD 🇨🇦",
-    "AUDCHF": "🇦🇺 AUD/CHF 🇨🇭",
-    "AUDJPY": "🇦🇺 AUD/JPY 🇯🇵",
-    "AUDUSD": "🇦🇺 AUD/USD 🇺🇸",
-    "CADCHF": "🇨🇦 CAD/CHF 🇨🇭",
-    "CADJPY": "🇨🇦 CAD/JPY 🇯🇵",
-    "CHFJPY": "🇨🇭 CHF/JPY 🇯🇵",
-    "EURAUD": "🇪🇺 EUR/AUD 🇦🇺",
-    "EURCAD": "🇪🇺 EUR/CAD 🇨🇦",
-    "EURCHF": "🇪🇺 EUR/CHF 🇨🇭",
-    "EURGBP": "🇪🇺 EUR/GBP 🇬🇧",
-    "GBPAUD": "🇬🇧 GBP/AUD 🇦🇺",
-    "GBPCAD": "🇬🇧 GBP/CAD 🇨🇦",
-    "GBPCHF": "🇬🇧 GBP/CHF 🇨🇭",
-    "GBPJPY": "🇬🇧 GBP/JPY 🇯🇵",
-    "GBPUSD": "🇬🇧 GBP/USD 🇺🇸",
-    "NZDCAD": "🇳🇿 NZD/CAD 🇨🇦",
-    "NZDCHF": "🇳🇿 NZD/CHF 🇨🇭",
-    "NZDJPY": "🇳🇿 NZD/JPY 🇯🇵",
-    "NZDUSD": "🇳🇿 NZD/USD 🇺🇸",
-    # 4 اسواق OTC لبوكت اوبشن
-    "EURUSD_OTC": "🇪🇺 EUR/USD OTC 🇺🇸",
-    "GBPUSD_OTC": "🇬🇧 GBP/USD OTC 🇺🇸",
-    "AUDUSD_OTC": "🇦🇺 AUD/USD OTC 🇺🇸",
-    "USDJPY_OTC": "🇺🇸 USD/JPY OTC 🇯🇵",
+    # كل الاسواق الحقيقية
+    "🇪🇺/🇺🇸 EUR/USD": "EURUSD",
+    "🇬🇧/🇺🇸 GBP/USD": "GBPUSD",
+    "🇺🇸/🇯🇵 USD/JPY": "USDJPY",
+    "🇦🇺/🇺🇸 AUD/USD": "AUDUSD",
+    "🇺🇸/🇨🇦 USD/CAD": "USDCAD",
+    "🇪🇺/🇯🇵 EUR/JPY": "EURJPY",
+    "🇨🇦/🇯🇵 CAD/JPY": "CADJPY",
+    "🇪🇺/🇬🇧 EUR/GBP": "EURGBP",
+    "🇦🇺/🇯🇵 AUD/JPY": "AUDJPY",
+    "🇳🇿/🇺🇸 NZD/USD": "NZDUSD",
+    "🇪🇺/🇨🇭 EUR/CHF": "EURCHF",
+    "🇬🇧/🇯🇵 GBP/JPY": "GBPJPY",
+    "🇦🇺/🇨🇦 AUD/CAD": "AUDCAD",
+    "🇪🇺/🇦🇺 EUR/AUD": "EURAUD",
+    "🇬🇧/🇨🇭 GBP/CHF": "GBPCHF",
+    "🇺🇸/🇨🇭 USD/CHF": "USDCHF",
+    "🇪🇺/🇨🇦 EUR/CAD": "EURCAD",
+    "🇦🇺/🇨🇭 AUD/CHF": "AUDCHF",
+    "🇬🇧/🇦🇺 GBP/AUD": "GBPAUD",
+    "🇨🇦/🇨🇭 CAD/CHF": "CADCHF",
+    "🇪🇺/🇳🇿 EUR/NZD": "EURNZD",
+    "🇬🇧/🇳🇿 GBP/NZD": "GBPNZD",
+    # 3 OTC فقط
+    "🇪🇺/🇺🇸 EUR/USD OTC": "EURUSD",
+    "🇬🇧/🇺🇸 GBP/USD OTC": "GBPUSD",
+    "🇺🇸/🇯🇵 USD/JPY OTC": "USDJPY"
 }
 
-FLAGS = {
-    "USD":"🇺🇸","EUR":"🇪🇺","GBP":"🇬🇧","JPY":"🇯🇵",
-    "AUD":"🇦🇺","CAD":"🇨🇦","CHF":"🇨🇭","NZD":"🇳🇿"
-}
+user_data = {}
 
-app = Flask(__name__)
-@app.route('/')
-def home():
-    return "Bot is alive - MAD-TRADER"
-def run_flask():
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
+def get_signal(symbol, tf):
+    intervals = {"5": Interval.INTERVAL_5_MINUTES, "15": Interval.INTERVAL_15_MINUTES, "H1": Interval.INTERVAL_1_HOUR}
+    handler = TA_Handler(symbol=symbol, screener="forex", exchange="FX", interval=intervals[tf])
+    s = handler.get_analysis().summary
+    buy, sell, neu = s['BUY'], s['SELL'], s['NEUTRAL']
+    total = buy + sell + neu
+    direction = "BUY" if buy > sell else "SELL"
+    percent = int((max(buy, sell) / total) * 100) if total > 0 else 0
+    return direction, percent
 
-async def start(update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("أهلاً بك في بوت MAD-TRADER 🔥\nاستخدم /signal لعرض كل الأزواج")
+@bot.message_handler(commands=['start'])
+def start(msg):
+    markup = InlineKeyboardMarkup(row_width=2)
+    for name in MARKETS:
+        markup.add(InlineKeyboardButton(name, callback_data=f"market_{name}"))
+    bot.send_message(msg.chat.id, "اختر السوق:", reply_markup=markup)
 
-async def signal_cmd(update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        keyboard = []
-        for symbol, name in MARKETS.items():
-            keyboard.append([InlineKeyboardButton(name, callback_data=f"sig_{symbol}")])
-        await update.message.reply_text("📊 اختر السوق:", reply_markup=InlineKeyboardMarkup(keyboard))
-        return
-    symbol = context.args[0].upper().replace("/","")
-    await do_analysis(update, symbol, False)
+@bot.callback_query_handler(func=lambda c: c.data.startswith("market_"))
+def choose_market(call):
+    name = call.data.replace("market_", "")
+    user_data[call.from_user.id] = MARKETS[name], name
+    markup = InlineKeyboardMarkup()
+    markup.row(InlineKeyboardButton("5m", callback_data="time_5"), InlineKeyboardButton("15m", callback_data="time_15"), InlineKeyboardButton("H1", callback_data="time_H1"))
+    bot.send_message(call.message.chat.id, f"اخترت {name}\nاختر الفريم:", reply_markup=markup)
 
-async def btn_handler(update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    symbol = q.data.replace("sig_", "")
-    await do_analysis(q, symbol, True)
+@bot.callback_query_handler(func=lambda c: c.data.startswith("time_"))
+def choose_time(call):
+    tf = call.data.replace("time_", "")
+    symbol, name = user_data[call.from_user.id]
+    bot.send_message(call.message.chat.id, f"⏳ جاري سحب اشارة {name} {tf} من TradingView...")
+    direction, percent = get_signal(symbol, tf)
+    emoji = "🟢" if direction == "BUY" else "🔴"
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton(f"قوة الاشارة: {percent}%", callback_data="x"))
+    bot.send_message(call.message.chat.id, f"📊 {name} {tf}\n{emoji} {direction}\n💪 {percent}%", reply_markup=markup)
 
-async def do_analysis(obj, symbol, is_callback):
-    send_func = obj.edit_message_text if is_callback else obj.message.reply_text
-    # لو OTC نشيل كلمة _OTC عشان التحليل
-    real_symbol = symbol.replace("_OTC","").replace("_otc","")
-    base = real_symbol[:3]
-    quote = real_symbol[3:]
-    full_name = MARKETS.get(symbol, f"{FLAGS.get(base,'🏳️')} {symbol} {FLAGS.get(quote,'🏳️')}")
-    try:
-        await send_func(f"🔍 جاري تحليل {full_name}...")
-        handler = TA_Handler(symbol=real_symbol, screener="forex", exchange="FX_IDC", interval=Interval.INTERVAL_1_MINUTE)
-        analysis = handler.get_analysis().summary
-        rec = analysis["RECOMMENDATION"]
-        buy = analysis["BUY"]
-        sell = analysis["SELL"]
-        neutral = analysis["NEUTRAL"]
-        total = buy + sell + neutral
-
-        if "BUY" in rec:
-            confidence = int((buy / total) * 100 + (buy - sell) * 1.5)
-        elif "SELL" in rec:
-            confidence = int((sell / total) * 100 + (sell - buy) * 1.5)
-        else:
-            confidence = int((max(buy,sell) / total) * 100)
-        confidence = max(65, min(97, confidence))
-
-        if "BUY" in rec:
-            msg = f"""🟢 إشارة شراء
-
-💱 {full_name}
-📊 الفريم: M1
-⏳ الدخول: الآن
-🎯 الثقة: {confidence}%
-
-🔥 MAD TRADER"""
-        elif "SELL" in rec:
-            msg = f"""🔴 إشارة بيع
-
-💱 {full_name}
-📊 الفريم: M1
-⏳ الدخول: الآن
-🎯 الثقة: {confidence}%
-
-🔥 MAD TRADER"""
-        else:
-            msg = f"""🟡 إشارة انتظار
-
-💱 {full_name}
-📊 الفريم: M1
-⏸️ القرار: انتظار
-🎯 الثقة: {confidence}%
-
-🔥 MAD TRADER"""
-        await send_func(msg)
-    except Exception as e:
-        await send_func(f"❌ خطأ في تحليل {full_name}: {e}")
-
-def main():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    application = ApplicationBuilder().token(TOKEN).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("signal", signal_cmd))
-    application.add_handler(CallbackQueryHandler(btn_handler))
-    Thread(target=run_flask, daemon=True).start()
-    print("Bot is starting...")
-    application.run_polling()
-
-if __name__ == '__main__':
-    main()
+bot.polling()
