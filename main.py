@@ -1,129 +1,115 @@
 import os
-import ccxt
-import pandas as pd
+import time
 import threading
 from flask import Flask
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+import telebot
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from tradingview_ta import TA_Handler, Interval
 
-BOT_TOKEN = "8828337019:AAHu5HxEgw5qFTeOd7DTWA1ELJXDH00yK1E"
-app_flask = Flask(__name__)
-@app_flask.route('/')
-def home(): return "Bot is running!"
-def run_flask():
-    port = int(os.environ.get("PORT", 10000))
-    app_flask.run(host='0.0.0.0', port=port)
+TOKEN = "8828337019:AAHu5HxEgw5qFTeOd7DTWA1ELJXDH00yK1E"
+bot = telebot.TeleBot(TOKEN, threaded=False)
 
 MARKETS = {
-    # اسواق حقيقية
-    "🇪🇺/🇺🇸 EUR/USD": "EUR/USD",
-    "🇬🇧/🇺🇸 GBP/USD": "GBP/USD",
-    "🇺🇸/🇯🇵 USD/JPY": "USD/JPY",
-    "🇦🇺/🇺🇸 AUD/USD": "AUD/USD",
-    "🇺🇸/🇨🇭 USD/CHF": "USD/CHF",
-    "🇺🇸/🇨🇦 USD/CAD": "USD/CAD",
-    "🇳🇿/🇺🇸 NZD/USD": "NZD/USD",
-    "🇪🇺/🇯🇵 EUR/JPY": "EUR/JPY",
-    "🇬🇧/🇯🇵 GBP/JPY": "GBP/JPY",
-    "🇦🇺/🇯🇵 AUD/JPY": "AUD/JPY",
-    "🇪🇺/🇬🇧 EUR/GBP": "EUR/GBP",
-    "🇪🇺/🇦🇺 EUR/AUD": "EUR/AUD",
-    "🇬🇧/🇦🇺 GBP/AUD": "GBP/AUD",
-    "🪙 GOLD": "XAU/USD",
-    "₿ BTC/USD": "BTC/USD",
-    # 4 اسواق OTC
-    "🇪🇺/🇺🇸 EUR/USD OTC": "EUR/USD_otc",
-    "🇬🇧/🇺🇸 GBP/USD OTC": "GBP/USD_otc",
-    "🪙 GOLD OTC": "GOLD_otc",
-    "₿ BTC OTC": "BTC_otc",
+    "🇪🇺/🇺🇸 EUR/USD": "EURUSD", "🇬🇧/🇺🇸 GBP/USD": "GBPUSD", "🇺🇸/🇯🇵 USD/JPY": "USDJPY",
+    "🇦🇺/🇺🇸 AUD/USD": "AUDUSD", "🇺🇸/🇨🇦 USD/CAD": "USDCAD", "🇪🇺/🇯🇵 EUR/JPY": "EURJPY",
+    "🇨🇦/🇯🇵 CAD/JPY": "CADJPY", "🇪🇺/🇬🇧 EUR/GBP": "EURGBP", "🇦🇺/🇯🇵 AUD/JPY": "AUDJPY",
+    "🇳🇿/🇺🇸 NZD/USD": "NZDUSD", "🇪🇺/🇨🇭 EUR/CHF": "EURCHF", "🇬🇧/🇯🇵 GBP/JPY": "GBPJPY",
+    "🇦🇺/🇨🇦 AUD/CAD": "AUDCAD", "🇪🇺/🇦🇺 EUR/AUD": "EURAUD", "🇬🇧/🇨🇭 GBP/CHF": "GBPCHF",
+    "🇺🇸/🇨🇭 USD/CHF": "USDCHF", "🇪🇺/🇨🇦 EUR/CAD": "EURCAD", "🇦🇺/🇨🇭 AUD/CHF": "AUDCHF",
+    "🇬🇧/🇦🇺 GBP/AUD": "GBPAUD", "🇨🇦/🇨🇭 CAD/CHF": "CADCHF", "🇪🇺/🇳🇿 EUR/NZD": "EURNZD",
+    "🇬🇧/🇳🇿 GBP/NZD": "GBPNZD",
+    "🇪🇺/🇺🇸 EUR/USD OTC": "EURUSD", "🇬🇧/🇺🇸 GBP/USD OTC": "GBPUSD", "🇺🇸/🇯🇵 USD/JPY OTC": "USDJPY"
 }
 
-exchange = ccxt.binance()
+user_data = {}
+last_request = {}
 
-def calc_rsi(series, period=14):
-    delta = series.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
+def get_tf_signal(symbol, interval):
+    try:
+        h = TA_Handler(symbol=symbol, screener="forex", exchange="FX", interval=interval)
+        s = h.get_analysis().summary
+        buys, sells = s['BUY'], s['SELL']
+        if buys+sells == 0: return "NEUTRAL", 50
+        direction = "BUY" if buys > sells else "SELL"
+        percent = int((max(buys, sells) / (buys + sells)) * 100)
+        return direction, percent
+    except:
+        return "ERROR", 0
 
-def calc_ema(series, period):
-    return series.ewm(span=period, adjust=False).mean()
+def get_confluence_signal(symbol):
+    d5, p5 = get_tf_signal(symbol, Interval.INTERVAL_5_MINUTES)
+    d15, p15 = get_tf_signal(symbol, Interval.INTERVAL_15_MINUTES)
+    d1h, p1h = get_tf_signal(symbol, Interval.INTERVAL_1_HOUR)
 
-def get_analysis(symbol):
-    real_symbol = symbol.replace("_otc","").replace("/","")
-    if "GOLD" in symbol or "XAU" in symbol: real_symbol = "PAXG/USDT"
-    if "BTC" in symbol: real_symbol = "BTC/USDT"
-    results = {}
-    for tf in ['5m','15m','1h']:
-        try:
-            ohlcv = exchange.fetch_ohlcv(real_symbol, tf, limit=100)
-            df = pd.DataFrame(ohlcv, columns=['t','o','h','l','c','v'])
-            df['rsi'] = calc_rsi(df['c'],14)
-            df['ema20'] = calc_ema(df['c'],20)
-            df['ema50'] = calc_ema(df['c'],50)
-            df['ema12'] = calc_ema(df['c'],12)
-            df['ema26'] = calc_ema(df['c'],26)
-            df['macd'] = df['ema12'] - df['ema26']
-            last = df.iloc[-1]
-            score=0; direction="NONE"
-            if last['c'] > last['ema20'] > last['ema50']: score+=40; direction="BUY"
-            elif last['c'] < last['ema20'] < last['ema50']: score+=40; direction="SELL"
-            else: score+=10
-            if direction=="BUY" and last['rsi']>55: score+=30
-            elif direction=="SELL" and last['rsi']<45: score+=30
-            if direction=="BUY" and last['macd']>0: score+=30
-            elif direction=="SELL" and last['macd']<0: score+=30
-            results[tf]={"percent":min(score,95),"dir":direction}
-        except:
-            results[tf]={"percent":0,"dir":"NONE"}
-    return results
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard=[]; row=[]
-    for name,sym in MARKETS.items():
-        row.append(InlineKeyboardButton(name, callback_data=f"market_{sym}"))
-        if len(row)==2:
-            keyboard.append(row); row=[]
-    if row: keyboard.append(row)
-    await update.message.reply_text("👋 البوت الاسطوري اختر السوق:", reply_markup=InlineKeyboardMarkup(keyboard))
-
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query=update.callback_query; await query.answer(); data=query.data
-    if data.startswith("market_"):
-        symbol=data.replace("market_",""); context.user_data["symbol"]=symbol
-        display=[k for k,v in MARKETS.items() if v==symbol][0]
-        keyboard=[[InlineKeyboardButton("🔍 فحص شامل", callback_data="check_all")]]
-        await query.edit_message_text(f"اخترت {display}\nاضغط فحص:", reply_markup=InlineKeyboardMarkup(keyboard))
-    elif data=="check_all":
-        symbol=context.user_data.get("symbol","EUR/USD")
-        display=[k for k,v in MARKETS.items() if v==symbol][0]
-        await query.edit_message_text(f"⏳ جاري فحص {display}...")
-        res=get_analysis(symbol)
-        p5=res['5m']['percent']; p15=res['15m']['percent']; p1h=res['1h']['percent']
-        d5=res['5m']['dir']; d15=res['15m']['dir']; d1h=res['1h']['dir']
-        avg=int((p5+p15+p1h)/3)
-        dirs=[d5,d15,d1h]
-        if p5<55 and p15<55 and p1h<55:
-            msg=f"😴 السوق نايم\n📊 {display}\n5m:{p5}% | 15m:{p15}% | H1:{p1h}%"
-        elif not (dirs.count("BUY")>=2 or dirs.count("SELL")>=2):
-            msg=f"❌ متضارب\n📊 {display}\n5m:{d5} {p5}% | 15m:{d15} {p15}% | H1:{d1h} {p1h}%"
+    # القرار التلقائي
+    if d5 == d15 == d1h and d5!= "ERROR":
+        if p5 >= 80 and p15 >= 80 and p1h >= 80:
+            decision = "🔥🔥 دخول قوي ذهبي - ادخل 2% 🔥🔥"
+        elif p5 >= 75 and p15 >= 75 and p1h >= 70:
+            decision = "✅ دخول جيد - ادخل 1% بحذر"
+        elif p5 >= 60 and p15 >= 60 and p1h >= 60:
+            decision = "⚠️ دخول ضعيف - يفضل عدم الدخول"
         else:
-            main_dir="BUY" if dirs.count("BUY")>=2 else "SELL"
-            emoji="🟢 BUY" if main_dir=="BUY" else "🔴 SELL"
-            if p5>=80 and p15>=80 and p1h>=80:
-                final=min(94,avg+12)
-                msg=f"🔥🔥🔥 ذهبية 🔥🔥🔥\n📊 {display}\n\n{emoji}\n💎 {final}%\n5m:{p5}% | 15m:{p15}% | H1:{p1h}% ✅\n⏰ 15 دقيقة"
-            elif p5>=70 and p15>=70 and p1h>=70:
-                msg=f"✅ موثوقة\n📊 {display}\n\n{emoji}\n💪 {avg}%\n5m:{p5}% | 15m:{p15}% | H1:{p1h}%\n⏰ 15 دقيقة"
-            else:
-                msg=f"❌ لا تدخل\n📊 {display}\n\n{emoji}\n💪 {avg}%\n5m:{p5}% | 15m:{p15}% | H1:{p1h}%"
-        keyboard=[[InlineKeyboardButton("🔍 فحص شامل", callback_data="check_all")]]
-        await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard))
+            decision = "❌ لا تدخل - ثقة ضعيفة"
+        avg = int((p5+p15+p1h)/3)
+        final = min(94, avg+5)
+        return d5, final, f"H1:{p1h}% | 15m:{p15}% | 5m:{p5}%\n{decision}"
 
-if __name__ == "__main__":
-    threading.Thread(target=run_flask, daemon=True).start()
-    app_bot=Application.builder().token(BOT_TOKEN).build()
-    app_bot.add_handler(CommandHandler("start",start))
-    app_bot.add_handler(CallbackQueryHandler(button_handler))
-    app_bot.run_polling()
+    return "NO_TRADE", 0, f"H1:{p1h}% {d1h} | 15m:{p15}% {d15} | 5m:{p5}% {d5}\n\n❌ لا تدخل - السوق متضارب"
+
+@bot.message_handler(commands=['start'])
+def start(msg):
+    markup = InlineKeyboardMarkup(row_width=2)
+    for name in MARKETS:
+        markup.add(InlineKeyboardButton(name, callback_data=f"market_{name}"))
+    bot.send_message(msg.chat.id, "👋 بوت احترافي Triple TF\nاختر السوق:", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("market_"))
+def choose_market(call):
+    bot.answer_callback_query(call.id)
+    name = call.data.replace("market_", "")
+    user_data[call.from_user.id] = MARKETS[name], name
+    markup = InlineKeyboardMarkup(row_width=1)
+    markup.add(InlineKeyboardButton("🔍 فحص شامل H1+15m+5m", callback_data="time_ALL"))
+    markup.add(InlineKeyboardButton("5m فقط", callback_data="time_5"), InlineKeyboardButton("15m فقط", callback_data="time_15"))
+    bot.send_message(call.message.chat.id, f"اخترت {name}\nاختر نوع الفحص:", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("time_"))
+def choose_time(call):
+    user_id = call.from_user.id
+    now = time.time()
+    if user_id in last_request and now - last_request[user_id] < 5:
+        bot.answer_callback_query(call.id, "⏳ انتظر")
+        return
+    last_request[user_id] = now
+    bot.answer_callback_query(call.id)
+
+    mode = call.data.replace("time_", "")
+    symbol, name = user_data.get(user_id, (None, None))
+    if not symbol: return
+
+    loading = bot.send_message(call.message.chat.id, f"⏳ جاري فحص {name}...")
+
+    if mode == "ALL":
+        direction, percent, details = get_confluence_signal(symbol)
+        if direction == "NO_TRADE":
+            bot.edit_message_text(f"📊 {name}\n{details}", call.message.chat.id, loading.message_id)
+            return
+        emoji = "🟢 BUY صعود" if direction == "BUY" else "🔴 SELL هبوط"
+        bot.edit_message_text(f"📊 {name}\n{emoji}\n💪 ثقة: {percent}%\n\n{details}", call.message.chat.id, loading.message_id)
+    else:
+        tf_map = {"5": Interval.INTERVAL_5_MINUTES, "15": Interval.INTERVAL_15_MINUTES}
+        d, p = get_tf_signal(symbol, tf_map[mode])
+        bot.edit_message_text(f"📊 {name} {mode}m\n{'🟢 BUY' if d=='BUY' else '🔴 SELL'}\n💪 {p}%\n\n{'✅ ادخل' if p>=80 else '❌ لا تدخل'}", call.message.chat.id, loading.message_id)
+
+app = Flask(__name__)
+@app.route('/')
+def home(): return "Bot is Live!"
+def run_flask():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
+
+threading.Thread(target=run_flask, daemon=True).start()
+bot.remove_webhook()
+time.sleep(1)
+bot.infinity_polling(skip_pending=True)
