@@ -1,12 +1,21 @@
+import os
 import ccxt
 import pandas as pd
+import threading
+from flask import Flask
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 BOT_TOKEN = "8828337019:AAHu5HxEgw5qFTeOd7DTWA1ELJXDH00yK1E"
-GOLD_CONFIDENCE = 80
+app_flask = Flask(__name__)
+@app_flask.route('/')
+def home(): return "Bot is running!"
+def run_flask():
+    port = int(os.environ.get("PORT", 10000))
+    app_flask.run(host='0.0.0.0', port=port)
 
 MARKETS = {
+    # اسواق حقيقية
     "🇪🇺/🇺🇸 EUR/USD": "EUR/USD",
     "🇬🇧/🇺🇸 GBP/USD": "GBP/USD",
     "🇺🇸/🇯🇵 USD/JPY": "USD/JPY",
@@ -20,11 +29,13 @@ MARKETS = {
     "🇪🇺/🇬🇧 EUR/GBP": "EUR/GBP",
     "🇪🇺/🇦🇺 EUR/AUD": "EUR/AUD",
     "🇬🇧/🇦🇺 GBP/AUD": "GBP/AUD",
+    "🪙 GOLD": "XAU/USD",
+    "₿ BTC/USD": "BTC/USD",
+    # 4 اسواق OTC
     "🇪🇺/🇺🇸 EUR/USD OTC": "EUR/USD_otc",
     "🇬🇧/🇺🇸 GBP/USD OTC": "GBP/USD_otc",
-    "🪙 GOLD": "XAU/USD",
     "🪙 GOLD OTC": "GOLD_otc",
-    "₿ BTC/USD": "BTC/USD",
+    "₿ BTC OTC": "BTC_otc",
 }
 
 exchange = ccxt.binance()
@@ -41,11 +52,8 @@ def calc_ema(series, period):
 
 def get_analysis(symbol):
     real_symbol = symbol.replace("_otc","").replace("/","")
-    if "GOLD" in symbol or "XAU" in symbol:
-        real_symbol = "PAXG/USDT"
-    if "BTC" in symbol:
-        real_symbol = "BTC/USDT"
-
+    if "GOLD" in symbol or "XAU" in symbol: real_symbol = "PAXG/USDT"
+    if "BTC" in symbol: real_symbol = "BTC/USDT"
     results = {}
     for tf in ['5m','15m','1h']:
         try:
@@ -58,16 +66,10 @@ def get_analysis(symbol):
             df['ema26'] = calc_ema(df['c'],26)
             df['macd'] = df['ema12'] - df['ema26']
             last = df.iloc[-1]
-            score=0
-            direction="NONE"
-            if last['c'] > last['ema20'] > last['ema50']:
-                score+=40
-                direction="BUY"
-            elif last['c'] < last['ema20'] < last['ema50']:
-                score+=40
-                direction="SELL"
-            else:
-                score+=10
+            score=0; direction="NONE"
+            if last['c'] > last['ema20'] > last['ema50']: score+=40; direction="BUY"
+            elif last['c'] < last['ema20'] < last['ema50']: score+=40; direction="SELL"
+            else: score+=10
             if direction=="BUY" and last['rsi']>55: score+=30
             elif direction=="SELL" and last['rsi']<45: score+=30
             if direction=="BUY" and last['macd']>0: score+=30
@@ -78,23 +80,18 @@ def get_analysis(symbol):
     return results
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard=[]
-    row=[]
+    keyboard=[]; row=[]
     for name,sym in MARKETS.items():
         row.append(InlineKeyboardButton(name, callback_data=f"market_{sym}"))
         if len(row)==2:
-            keyboard.append(row)
-            row=[]
+            keyboard.append(row); row=[]
     if row: keyboard.append(row)
     await update.message.reply_text("👋 البوت الاسطوري اختر السوق:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query=update.callback_query
-    await query.answer()
-    data=query.data
+    query=update.callback_query; await query.answer(); data=query.data
     if data.startswith("market_"):
-        symbol=data.replace("market_","")
-        context.user_data["symbol"]=symbol
+        symbol=data.replace("market_",""); context.user_data["symbol"]=symbol
         display=[k for k,v in MARKETS.items() if v==symbol][0]
         keyboard=[[InlineKeyboardButton("🔍 فحص شامل", callback_data="check_all")]]
         await query.edit_message_text(f"اخترت {display}\nاضغط فحص:", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -116,15 +113,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             emoji="🟢 BUY" if main_dir=="BUY" else "🔴 SELL"
             if p5>=80 and p15>=80 and p1h>=80:
                 final=min(94,avg+12)
-                msg=f"🔥🔥🔥 صفقة ذهبية 🔥🔥🔥\n📊 {display}\n\n{emoji}\n💎 الثقة: {final}%\n5m:{p5}% | 15m:{p15}% | H1:{p1h}% ✅\n\n⏰ 15 دقيقة"
+                msg=f"🔥🔥🔥 ذهبية 🔥🔥🔥\n📊 {display}\n\n{emoji}\n💎 {final}%\n5m:{p5}% | 15m:{p15}% | H1:{p1h}% ✅\n⏰ 15 دقيقة"
             elif p5>=70 and p15>=70 and p1h>=70:
-                msg=f"✅ اشارة موثوقة\n📊 {display}\n\n{emoji}\n💪 الثقة: {avg}%\n5m:{p5}% | 15m:{p15}% | H1:{p1h}%\n\n⏰ 15 دقيقة"
+                msg=f"✅ موثوقة\n📊 {display}\n\n{emoji}\n💪 {avg}%\n5m:{p5}% | 15m:{p15}% | H1:{p1h}%\n⏰ 15 دقيقة"
             else:
-                msg=f"❌ لا تدخل\n📊 {display}\n\n{emoji}\n💪 {avg}%\n5m:{p5}% | 15m:{p15}% | H1:{p1h}%\n⚠️ انتظر ذهبية"
+                msg=f"❌ لا تدخل\n📊 {display}\n\n{emoji}\n💪 {avg}%\n5m:{p5}% | 15m:{p15}% | H1:{p1h}%"
         keyboard=[[InlineKeyboardButton("🔍 فحص شامل", callback_data="check_all")]]
         await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard))
 
-app=Application.builder().token(BOT_TOKEN).build()
-app.add_handler(CommandHandler("start",start))
-app.add_handler(CallbackQueryHandler(button_handler))
-app.run_polling()
+if __name__ == "__main__":
+    threading.Thread(target=run_flask, daemon=True).start()
+    app_bot=Application.builder().token(BOT_TOKEN).build()
+    app_bot.add_handler(CommandHandler("start",start))
+    app_bot.add_handler(CallbackQueryHandler(button_handler))
+    app_bot.run_polling()
