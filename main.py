@@ -6,12 +6,11 @@ import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from tradingview_ta import TA_Handler, Interval
 
-TOKEN = "8828337019:AAHu5HxEgw5qFTeOd7DTWA1ELJXDH00yK1E"
+TOKEN = "8828337019:AAHu5HxEgw5qFTeOd7DTWA1ELJXDH00yK1E" # حط توكنك هنا
 bot = telebot.TeleBot(TOKEN, threaded=False)
 
-# ====== هذا فقط اللي ضفته - القفل برقم سري ======
-PASSWORD = "*77889900" # غيره للي تبيه
-allowed = set() # اللي يدخل الرقم ينضاف هنا
+PASSWORD = "7788*9900" # رقمك السري
+allowed = set()
 
 def is_allowed(user_id):
     return user_id in allowed
@@ -21,15 +20,14 @@ def pass_check(m):
     parts = m.text.split()
     if len(parts) > 1 and parts[1] == PASSWORD:
         allowed.add(m.from_user.id)
-        bot.reply_to(m, "✅ انفتح البوت لك، الحين اكتب /start")
+        bot.reply_to(m, "✅ تم فتح البوت لك، اكتب /start")
     else:
-        bot.reply_to(m, f"❌ الرقم غلط - اكتب /pass {PASSWORD}")
+        bot.reply_to(m, "❌ الرقم السري غلط")
 
 @bot.message_handler(commands=['lock'])
 def lock(m):
     allowed.discard(m.from_user.id)
     bot.reply_to(m, "🔒 قفلت البوت")
-# ====== انتهى اللي ضفته ======
 
 MARKETS = {
     "🇪🇺/🇺🇸 EUR/USD": "EURUSD", "🇬🇧/🇺🇸 GBP/USD": "GBPUSD", "🇺🇸/🇯🇵 USD/JPY": "USDJPY",
@@ -62,7 +60,6 @@ def get_confluence_signal(symbol):
     d5, p5 = get_tf_signal(symbol, Interval.INTERVAL_5_MINUTES)
     d15, p15 = get_tf_signal(symbol, Interval.INTERVAL_15_MINUTES)
     d1h, p1h = get_tf_signal(symbol, Interval.INTERVAL_1_HOUR)
-
     if d5 == d15 == d1h and d5!= "ERROR":
         if p5 >= 80 and p15 >= 80 and p1h >= 80:
             decision = "🔥🔥 دخول قوي ذهبي - ادخل 2% 🔥🔥"
@@ -75,13 +72,12 @@ def get_confluence_signal(symbol):
         avg = int((p5+p15+p1h)/3)
         final = min(94, avg+5)
         return d5, final, f"H1:{p1h}% | 15m:{p15}% | 5m:{p5}%\n{decision}"
-
     return "NO_TRADE", 0, f"H1:{p1h}% {d1h} | 15m:{p15}% {d15} | 5m:{p5}% {d5}\n\n❌ لا تدخل - السوق متضارب"
 
 @bot.message_handler(commands=['start'])
 def start(msg):
     if not is_allowed(msg.from_user.id):
-        bot.send_message(msg.chat.id, f"🔒 البوت خاص\nارسل الرقم السري:\n/pass {PASSWORD}")
+        bot.send_message(msg.chat.id, "🔒 البوت خاص\nادخل الرقم السري بهالطريقة:\n/pass الرقم")
         return
     markup = InlineKeyboardMarkup(row_width=2)
     for name in MARKETS:
@@ -91,7 +87,7 @@ def start(msg):
 @bot.callback_query_handler(func=lambda c: c.data.startswith("market_"))
 def choose_market(call):
     if not is_allowed(call.from_user.id):
-        bot.answer_callback_query(call.id, "🔒 مقفل - ارسل /pass")
+        bot.answer_callback_query(call.id, "🔒 مقفل")
         return
     bot.answer_callback_query(call.id)
     name = call.data.replace("market_", "")
@@ -113,13 +109,10 @@ def choose_time(call):
         return
     last_request[user_id] = now
     bot.answer_callback_query(call.id)
-
     mode = call.data.replace("time_", "")
     symbol, name = user_data.get(user_id, (None, None))
     if not symbol: return
-
     loading = bot.send_message(call.message.chat.id, f"⏳ جاري فحص {name}...")
-
     if mode == "ALL":
         direction, percent, details = get_confluence_signal(symbol)
         if direction == "NO_TRADE":
