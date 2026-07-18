@@ -9,6 +9,28 @@ from tradingview_ta import TA_Handler, Interval
 TOKEN = "8828337019:AAHu5HxEgw5qFTeOd7DTWA1ELJXDH00yK1E"
 bot = telebot.TeleBot(TOKEN, threaded=False)
 
+# ====== هذا فقط اللي ضفته - القفل برقم سري ======
+PASSWORD = "*77889900" # غيره للي تبيه
+allowed = set() # اللي يدخل الرقم ينضاف هنا
+
+def is_allowed(user_id):
+    return user_id in allowed
+
+@bot.message_handler(commands=['pass'])
+def pass_check(m):
+    parts = m.text.split()
+    if len(parts) > 1 and parts[1] == PASSWORD:
+        allowed.add(m.from_user.id)
+        bot.reply_to(m, "✅ انفتح البوت لك، الحين اكتب /start")
+    else:
+        bot.reply_to(m, f"❌ الرقم غلط - اكتب /pass {PASSWORD}")
+
+@bot.message_handler(commands=['lock'])
+def lock(m):
+    allowed.discard(m.from_user.id)
+    bot.reply_to(m, "🔒 قفلت البوت")
+# ====== انتهى اللي ضفته ======
+
 MARKETS = {
     "🇪🇺/🇺🇸 EUR/USD": "EURUSD", "🇬🇧/🇺🇸 GBP/USD": "GBPUSD", "🇺🇸/🇯🇵 USD/JPY": "USDJPY",
     "🇦🇺/🇺🇸 AUD/USD": "AUDUSD", "🇺🇸/🇨🇦 USD/CAD": "USDCAD", "🇪🇺/🇯🇵 EUR/JPY": "EURJPY",
@@ -41,7 +63,6 @@ def get_confluence_signal(symbol):
     d15, p15 = get_tf_signal(symbol, Interval.INTERVAL_15_MINUTES)
     d1h, p1h = get_tf_signal(symbol, Interval.INTERVAL_1_HOUR)
 
-    # القرار التلقائي
     if d5 == d15 == d1h and d5!= "ERROR":
         if p5 >= 80 and p15 >= 80 and p1h >= 80:
             decision = "🔥🔥 دخول قوي ذهبي - ادخل 2% 🔥🔥"
@@ -59,6 +80,9 @@ def get_confluence_signal(symbol):
 
 @bot.message_handler(commands=['start'])
 def start(msg):
+    if not is_allowed(msg.from_user.id):
+        bot.send_message(msg.chat.id, f"🔒 البوت خاص\nارسل الرقم السري:\n/pass {PASSWORD}")
+        return
     markup = InlineKeyboardMarkup(row_width=2)
     for name in MARKETS:
         markup.add(InlineKeyboardButton(name, callback_data=f"market_{name}"))
@@ -66,6 +90,9 @@ def start(msg):
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("market_"))
 def choose_market(call):
+    if not is_allowed(call.from_user.id):
+        bot.answer_callback_query(call.id, "🔒 مقفل - ارسل /pass")
+        return
     bot.answer_callback_query(call.id)
     name = call.data.replace("market_", "")
     user_data[call.from_user.id] = MARKETS[name], name
@@ -76,6 +103,9 @@ def choose_market(call):
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("time_"))
 def choose_time(call):
+    if not is_allowed(call.from_user.id):
+        bot.answer_callback_query(call.id, "🔒 مقفل")
+        return
     user_id = call.from_user.id
     now = time.time()
     if user_id in last_request and now - last_request[user_id] < 5:
