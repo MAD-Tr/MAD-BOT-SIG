@@ -9,7 +9,7 @@ from tradingview_ta import TA_Handler, Interval
 TOKEN = "8828337019:AAHu5HxEgw5qFTeOd7DTWA1ELJXDH00yK1E" # حط توكنك هنا
 bot = telebot.TeleBot(TOKEN, threaded=False)
 
-PASSWORD = "7788*9900" # رقمك السري
+PASSWORD = "7154" # رقمك السري
 allowed = set()
 
 def is_allowed(user_id):
