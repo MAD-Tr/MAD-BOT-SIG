@@ -6,10 +6,10 @@ import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from tradingview_ta import TA_Handler, Interval
 
-TOKEN = "8828337019:AAHu5HxEgw5qFTeOd7DTWA1ELJXDH00yK1E" # حط توكنك هنا
+TOKEN = "8828337019:AAHu5HxEgw5qFTeOd7DTWA1ELJXDH00yK1E"
 bot = telebot.TeleBot(TOKEN, threaded=False)
 
-PASSWORD = "7154" # رقمك السري
+PASSWORD = "7154"
 allowed = set()
 
 def is_allowed(user_id):
@@ -74,8 +74,6 @@ def get_confluence_signal(symbol):
         return d5, final, f"H1:{p1h}% | 15m:{p15}% | 5m:{p5}%\n{decision}", p5, p15, p1h
     return "NO_TRADE", 0, f"H1:{p1h}% {d1h} | 15m:{p15}% {d15} | 5m:{p5}% {d5}\n\n❌ لا تدخل - السوق متضارب", p5, p15, p1h
 
-# ==================== الإضافة الجديدة فقط ====================
-
 @bot.callback_query_handler(func=lambda c: c.data == "scan_golden")
 def scan_golden(call):
     if not is_allowed(call.from_user.id):
@@ -84,32 +82,25 @@ def scan_golden(call):
     user_id = call.from_user.id
     now = time.time()
     if user_id in last_request and now - last_request[user_id] < 10:
-        bot.answer_callback_query(call.id, "⏳ انتظر 10 ثواني بين كل سكان")
+        bot.answer_callback_query(call.id, "⏳ انتظر 10 ثواني")
         return
     last_request[user_id] = now
-    bot.answer_callback_query(call.id, "🔍 بدأ الفحص الذهبي...")
-
-    loading = bot.send_message(call.message.chat.id, "🔍 جاري فحص كل الأسواق 5m+15m+1H...\nقد يأخذ 20-30 ثانية ⏳")
-
+    bot.answer_callback_query(call.id, "🔍 بدأ الفحص...")
+    loading = bot.send_message(call.message.chat.id, "🔍 جاري فحص كل الأسواق 5m+15m+1H...\nقد يأخذ 30 ثانية ⏳")
     golden_found = []
-
     for display_name, symbol in MARKETS.items():
-        # نستخدم نفس دالتك القديمة بالحرف - ما تغيرت
         direction, percent, details, p5, p15, p1h = get_confluence_signal(symbol)
-
-        # شرط الفرصة الذهبية نفس شرطك القديم
         if direction!= "NO_TRADE" and p5 >= 80 and p15 >= 80 and p1h >= 80:
             emoji = "🟢 صعود" if direction == "BUY" else "🔴 هبوط"
             golden_found.append(f"🔥 {display_name} {emoji} - ثقة {percent}%\n H1:{p1h}% | 15m:{p15}% | 5m:{p5}%")
-
     if golden_found:
         text = f"💎 وجدت {len(golden_found)} فرص ذهبية قوية جداً الآن:\n\n" + "\n\n".join(golden_found)
     else:
-        text = "🔴 لا يوجد فرص ذهبية حالياً (80%+ في كل الفريمات)\nكل الأسواق متضاربة، جرب بعد 5 دقايق"
-
-    bot.edit_message_text(text, call.message.chat.id, loading.message_id)
-
-# ==================== نهاية الإضافة ====================
+        text = "🔴 لا يوجد فرص ذهبية حالياً\nجرب بعد 5 دقايق"
+    try:
+        bot.edit_message_text(text, call.message.chat.id, loading.message_id)
+    except:
+        bot.send_message(call.message.chat.id, text)
 
 @bot.message_handler(commands=['start'])
 def start(msg):
@@ -117,7 +108,6 @@ def start(msg):
         bot.send_message(msg.chat.id, "🔒 البوت خاص\nادخل الرقم السري بهالطريقة:\n/pass الرقم")
         return
     markup = InlineKeyboardMarkup(row_width=2)
-    # زر البحث الذهبي الجديد في الأعلى
     markup.add(InlineKeyboardButton("💎 بحث عن الفرص الذهبية 5m 15m 1h", callback_data="scan_golden"))
     for name in MARKETS:
         markup.add(InlineKeyboardButton(name, callback_data=f"market_{name}"))
