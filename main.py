@@ -6,7 +6,7 @@ import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from tradingview_ta import TA_Handler, Interval
 
-TOKEN = "8828337019:AAHu5HxEgw5qFTeOd7DTWA1ELJXDH00yK1E"
+TOKEN = "8828337019:AAHu5HxEgw5qFTeOd7DTWA1ELJXDH00yK1E" # غير التوكن بعدين
 bot = telebot.TeleBot(TOKEN, threaded=False)
 
 PASSWORD = "7154"
@@ -71,9 +71,10 @@ def get_confluence_signal(symbol):
             decision = "❌ لا تدخل - ثقة ضعيفة"
         avg = int((p5+p15+p1h)/3)
         final = min(94, avg+5)
-        return d5, final, f"H1:{p1h}% | 15m:{p15}% | 5m:{p5}%\n{decision}", p5, p15, p1h
-    return "NO_TRADE", 0, f"H1:{p1h}% {d1h} | 15m:{p15}% {d15} | 5m:{p5}% {d5}\n\n❌ لا تدخل - السوق متضارب", p5, p15, p1h
+        return d5, final, f"H1:{p1h}% | 15m:{p15}% | 5m:{p5}%\n{decision}"
+    return "NO_TRADE", 0, f"H1:{p1h}% {d1h} | 15m:{p15}% {d15} | 5m:{p5}% {d5}\n\n❌ لا تدخل - السوق متضارب"
 
+# ==================== الإضافة الجديدة فقط - ما لمست القديم ====================
 @bot.callback_query_handler(func=lambda c: c.data == "scan_golden")
 def scan_golden(call):
     if not is_allowed(call.from_user.id):
@@ -81,26 +82,34 @@ def scan_golden(call):
         return
     user_id = call.from_user.id
     now = time.time()
-    if user_id in last_request and now - last_request[user_id] < 10:
-        bot.answer_callback_query(call.id, "⏳ انتظر 10 ثواني")
+    if user_id in last_request and now - last_request[user_id] < 15:
+        bot.answer_callback_query(call.id, "⏳ انتظر 15 ثانية")
         return
     last_request[user_id] = now
-    bot.answer_callback_query(call.id, "🔍 بدأ الفحص...")
-    loading = bot.send_message(call.message.chat.id, "🔍 جاري فحص كل الأسواق 5m+15m+1H...\nقد يأخذ 30 ثانية ⏳")
-    golden_found = []
+    bot.answer_callback_query(call.id, "🔍 جاري البحث...")
+    loading = bot.send_message(call.message.chat.id, "💎 جاري فحص كل الأسواق بحثاً عن الفرص الذهبية...\n⏳ 5m + 15m + 1H - قد يأخذ 30 ثانية")
+    golden = []
     for display_name, symbol in MARKETS.items():
-        direction, percent, details, p5, p15, p1h = get_confluence_signal(symbol)
-        if direction!= "NO_TRADE" and p5 >= 80 and p15 >= 80 and p1h >= 80:
-            emoji = "🟢 صعود" if direction == "BUY" else "🔴 هبوط"
-            golden_found.append(f"🔥 {display_name} {emoji} - ثقة {percent}%\n H1:{p1h}% | 15m:{p15}% | 5m:{p5}%")
-    if golden_found:
-        text = f"💎 وجدت {len(golden_found)} فرص ذهبية قوية جداً الآن:\n\n" + "\n\n".join(golden_found)
+        # نفس دالتك القديمة اللي تسحب من TradingView - ما غيرتها
+        d5, p5 = get_tf_signal(symbol, Interval.INTERVAL_5_MINUTES)
+        d15, p15 = get_tf_signal(symbol, Interval.INTERVAL_15_MINUTES)
+        d1h, p1h = get_tf_signal(symbol, Interval.INTERVAL_1_HOUR)
+        if d5 == d15 == d1h and d5!= "ERROR" and d5!= "NEUTRAL":
+            if p5 >= 80 and p15 >= 80 and p1h >= 80:
+                avg = int((p5+p15+p1h)/3)
+                final = min(94, avg+5)
+                emoji = "🟢 صعود" if d5 == "BUY" else "🔴 هبوط"
+                golden.append(f"🔥 {display_name} {emoji} - ثقة {final}%\n H1:{p1h}% | 15m:{p15}% | 5m:{p5}%")
+        time.sleep(0.5) # عشان لا ينحظر من TradingView
+    if golden:
+        text = f"💎💎 وجدت {len(golden)} فرص ذهبية قوية جداً:\n\n" + "\n\n".join(golden)
     else:
-        text = "🔴 لا يوجد فرص ذهبية حالياً\nجرب بعد 5 دقايق"
+        text = "🔴 لا يوجد فرص ذهبية حالياً (لازم 80%+ في كل الفريمات)\n⏰ جرب بعد 5 دقايق"
     try:
         bot.edit_message_text(text, call.message.chat.id, loading.message_id)
     except:
         bot.send_message(call.message.chat.id, text)
+# ==================== نهاية الإضافة ====================
 
 @bot.message_handler(commands=['start'])
 def start(msg):
@@ -111,7 +120,7 @@ def start(msg):
     markup.add(InlineKeyboardButton("💎 بحث عن الفرص الذهبية 5m 15m 1h", callback_data="scan_golden"))
     for name in MARKETS:
         markup.add(InlineKeyboardButton(name, callback_data=f"market_{name}"))
-    bot.send_message(msg.chat.id, "👋 بوت احترافي Triple TF\nاختر السوق أو ابحث عن الفرص الذهبية:", reply_markup=markup)
+    bot.send_message(msg.chat.id, "👋 بوت احترافي Triple TF\nاختر السوق:", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("market_"))
 def choose_market(call):
@@ -143,7 +152,7 @@ def choose_time(call):
     if not symbol: return
     loading = bot.send_message(call.message.chat.id, f"⏳ جاري فحص {name}...")
     if mode == "ALL":
-        direction, percent, details, p5, p15, p1h = get_confluence_signal(symbol)
+        direction, percent, details = get_confluence_signal(symbol)
         if direction == "NO_TRADE":
             bot.edit_message_text(f"📊 {name}\n{details}", call.message.chat.id, loading.message_id)
             return
