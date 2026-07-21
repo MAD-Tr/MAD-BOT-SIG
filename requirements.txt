@@ -1,6 +1,3 @@
-telebot
 pyTelegramBotAPI
 tradingview-ta
 Flask
-yfinance
-pandas
