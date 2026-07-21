@@ -1,3 +1,4 @@
 pyTelegramBotAPI
 tradingview-ta
-flask
+Flask
+quotexapi
