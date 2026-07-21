@@ -1,5 +1,6 @@
-import os, time, threading, logging
-logging.basicConfig(level=logging.INFO)
+import os
+import time
+import threading
 from flask import Flask
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -7,6 +8,7 @@ from tradingview_ta import TA_Handler, Interval
 
 TOKEN = "8828337019:AAHu5HxEgw5qFTeOd7DTWA1ELJXDH00yK1E"
 bot = telebot.TeleBot(TOKEN, threaded=False)
+
 PASSWORD = "7154"
 allowed = set()
 def is_allowed(uid): return uid in allowed
@@ -18,75 +20,112 @@ def pass_check(m):
     try:
         if m.text.split()[1] == PASSWORD:
             allowed.add(m.from_user.id)
-            msg = bot.send_message(m.chat.id, "✅ تم /start")
+            msg = bot.send_message(m.chat.id, "✅ تم - ارسل /start")
             time.sleep(2)
             try: bot.delete_message(m.chat.id, msg.message_id)
             except: pass
     except: pass
 
 MARKETS = {
-    "🇪🇺/🇺🇸 EUR/USD": "EURUSD", "🇬🇧/🇺🇸 GBP/USD": "GBPUSD",
-    "🇺🇸/🇯🇵 USD/JPY": "USDJPY", "🇦🇺/🇺🇸 AUD/USD": "AUDUSD",
-    "🇺🇸/🇨🇦 USD/CAD": "USDCAD", "🇺🇸/🇨🇭 USD/CHF": "USDCHF",
-    "🇳🇿/🇺🇸 NZD/USD": "NZDUSD", "🇪🇺/🇬🇧 EUR/GBP": "EURGBP",
-    "🇪🇺/🇯🇵 EUR/JPY": "EURJPY", "🇬🇧/🇯🇵 GBP/JPY": "GBPJPY",
-    "🇦🇺/🇯🇵 AUD/JPY": "AUDJPY", "🇪🇺/🇦🇺 EUR/AUD": "EURAUD",
-    "🇪🇺/🇨🇦 EUR/CAD": "EURCAD", "🇬🇧/🇨🇦 GBP/CAD": "GBPCAD",
-    "🇪🇺/🇨🇭 EUR/CHF": "EURCHF", "🇬🇧/🇨🇭 GBP/CHF": "GBPCHF",
-    "🇦🇺/🇨🇦 AUD/CAD": "AUDCAD", "🇨🇭/🇯🇵 CHF/JPY": "CHFJPY",
-    "🇪🇺/🇳🇿 EUR/NZD": "EURNZD", "🇬🇧/🇦🇺 GBP/AUD": "GBPAUD",
+    "🇪🇺/🇺🇸 EUR/USD": "EURUSD", "🇬🇧/🇺🇸 GBP/USD": "GBPUSD", "🇺🇸/🇯🇵 USD/JPY": "USDJPY",
+    "🇦🇺/🇺🇸 AUD/USD": "AUDUSD", "🇺🇸/🇨🇦 USD/CAD": "USDCAD", "🇪🇺/🇯🇵 EUR/JPY": "EURJPY",
+    "🇨🇦/🇯🇵 CAD/JPY": "CADJPY", "🇪🇺/🇬🇧 EUR/GBP": "EURGBP", "🇦🇺/🇯🇵 AUD/JPY": "AUDJPY",
+    "🇳🇿/🇺🇸 NZD/USD": "NZDUSD", "🇪🇺/🇨🇭 EUR/CHF": "EURCHF", "🇬🇧/🇯🇵 GBP/JPY": "GBPJPY",
+    "🇦🇺/🇨🇦 AUD/CAD": "AUDCAD", "🇪🇺/🇦🇺 EUR/AUD": "EURAUD", "🇬🇧/🇨🇭 GBP/CHF": "GBPCHF",
+    "🇺🇸/🇨🇭 USD/CHF": "USDCHF", "🇪🇺/🇨🇦 EUR/CAD": "EURCAD", "🇦🇺/🇨🇭 AUD/CHF": "AUDCHF",
+    "🇬🇧/🇦🇺 GBP/AUD": "GBPAUD", "🇨🇦/🇨🇭 CAD/CHF": "CADCHF", "🇪🇺/🇳🇿 EUR/NZD": "EURNZD",
+    "🇬🇧/🇳🇿 GBP/NZD": "GBPNZD",
+    "🇪🇺/🇺🇸 EUR/USD OTC": "EURUSD", "🇬🇧/🇺🇸 GBP/USD OTC": "GBPUSD", "🇺🇸/🇯🇵 USD/JPY OTC": "USDJPY"
 }
 
+user_data = {}
+last_request = {}
 qs = {}
-ps = {} # pocket
 
-def get_sig(sym, interval):
+def get_tf_signal(symbol, interval):
     try:
-        h = TA_Handler(symbol=sym, screener="forex", exchange="FX", interval=interval)
+        h = TA_Handler(symbol=symbol, screener="forex", exchange="FX", interval=interval)
         s = h.get_analysis().summary
-        b,se = s['BUY'], s['SELL']
-        if b+se==0: return "NEUTRAL",50
-        return ("BUY" if b>se else "SELL"), int((max(b,se)/(b+se))*100)
-    except: return "ERROR",0
+        buys, sells = s['BUY'], s['SELL']
+        if buys+sells == 0: return "NEUTRAL", 50
+        direction = "BUY" if buys > sells else "SELL"
+        percent = int((max(buys, sells) / (buys + sells)) * 100)
+        return direction, percent
+    except:
+        return "ERROR", 0
 
-def confluence(sym):
-    d5,p5 = get_sig(sym, Interval.INTERVAL_5_MINUTES)
-    d15,p15 = get_sig(sym, Interval.INTERVAL_15_MINUTES)
-    d1h,p1h = get_sig(sym, Interval.INTERVAL_1_HOUR)
-    if d5==d15==d1h and d5!="ERROR":
-        return d5, min(94,int((p5+p15+p1h)/3)+5)
-    return "NO_TRADE",0
+def get_confluence_signal(symbol):
+    d5, p5 = get_tf_signal(symbol, Interval.INTERVAL_5_MINUTES)
+    d15, p15 = get_tf_signal(symbol, Interval.INTERVAL_15_MINUTES)
+    d1h, p1h = get_tf_signal(symbol, Interval.INTERVAL_1_HOUR)
+    if d5 == d15 == d1h and d5!= "ERROR":
+        if p5 >= 80 and p15 >= 80 and p1h >= 80:
+            decision = "🔥🔥 دخول قوي ذهبي - ادخل 2% 🔥🔥"
+        elif p5 >= 75 and p15 >= 75 and p1h >= 70:
+            decision = "✅ دخول جيد - ادخل 1% بحذر"
+        elif p5 >= 60 and p15 >= 60 and p1h >= 60:
+            decision = "⚠️ دخول ضعيف - يفضل عدم الدخول"
+        else:
+            decision = "❌ لا تدخل - ثقة ضعيفة"
+        avg = int((p5+p15+p1h)/3)
+        final = min(94, avg+5)
+        return d5, final, f"H1:{p1h}% | 15m:{p15}% | 5m:{p5}%\n{decision}"
+    return "NO_TRADE", 0, f"H1:{p1h}% {d1h} | 15m:{p15}% {d15} | 5m:{p5}% {d5}\n\n❌ لا تدخل - السوق متضارب"
 
-# ====== القوائم ======
+# ===== النسخة المحترفة - تداول كالمحترفين =====
+def get_confluence_85(symbol):
+    try:
+        h5 = TA_Handler(symbol=symbol, screener="forex", exchange="FX", interval=Interval.INTERVAL_5_MINUTES).get_analysis()
+        h15 = TA_Handler(symbol=symbol, screener="forex", exchange="FX", interval=Interval.INTERVAL_15_MINUTES).get_analysis()
+        h1h = TA_Handler(symbol=symbol, screener="forex", exchange="FX", interval=Interval.INTERVAL_1_HOUR).get_analysis()
+
+        d5, p5 = get_tf_signal(symbol, Interval.INTERVAL_5_MINUTES)
+        d15, p15 = get_tf_signal(symbol, Interval.INTERVAL_15_MINUTES)
+        d1h, p1h = get_tf_signal(symbol, Interval.INTERVAL_1_HOUR)
+
+        if not (d5 == d15 == d1h and d5 in ["BUY","SELL"]):
+            return "NO_TRADE", 0, ""
+
+        avg = int((p5+p15+p1h)/3)
+        if avg < 85:
+            return "NO_TRADE", 0, ""
+
+        rsi5 = h5.indicators.get("RSI", 50)
+        rsi15 = h15.indicators.get("RSI", 50)
+        if d5=="BUY" and (rsi5>75 or rsi15>75): return "NO_TRADE",0,f"RSI متشبع {int(rsi5)}"
+        if d5=="SELL" and (rsi5<25 or rsi15<25): return "NO_TRADE",0,f"RSI متشبع {int(rsi5)}"
+
+        ema20_1h = h1h.indicators.get("EMA20",0)
+        ema50_1h = h1h.indicators.get("EMA50",0)
+        if d5=="BUY" and ema20_1h < ema50_1h: return "NO_TRADE",0,"عكس الترند"
+        if d5=="SELL" and ema20_1h > ema50_1h: return "NO_TRADE",0,"عكس الترند"
+
+        macd_15 = h15.indicators.get("MACD.macd",0)
+        macd_sig_15 = h15.indicators.get("MACD.signal",0)
+        if d5=="BUY" and macd_15 < macd_sig_15: return "NO_TRADE",0,"MACD سلبي"
+        if d5=="SELL" and macd_15 > macd_sig_15: return "NO_TRADE",0,"MACD ايجابي"
+
+        return d5, min(94, avg+5), f"5m:{p5}% 15m:{p15}% 1h:{p1h}% | RSI:{int(rsi5)} EMA:OK MACD:OK"
+    except:
+        return "NO_TRADE",0,""
+
+def quotex_menu(uid):
+    s = qs.get(uid, {"amount": 20, "trades": 6, "running": False})
+    mk = InlineKeyboardMarkup(row_width=3)
+    mk.add(InlineKeyboardButton(f"💰 المبلغ: {s['amount']}﷼", callback_data="none_q"))
+    mk.add(InlineKeyboardButton("10﷼", callback_data="qa_10"),InlineKeyboardButton("20﷼", callback_data="qa_20"),InlineKeyboardButton("50﷼", callback_data="qa_50"))
+    mk.add(InlineKeyboardButton("100﷼", callback_data="qa_100"),InlineKeyboardButton("200﷼", callback_data="qa_200"))
+    mk.add(InlineKeyboardButton(f"🔢 عدد الصفقات: {s['trades']}", callback_data="none_q2"))
+    mk.add(InlineKeyboardButton("3", callback_data="qt_3"),InlineKeyboardButton("4", callback_data="qt_4"),InlineKeyboardButton("6", callback_data="qt_6"),InlineKeyboardButton("8", callback_data="qt_8"))
+    mk.add(InlineKeyboardButton("🔐 تسجيل دخول كوتكس", callback_data="qx_login"))
+    mk.add(InlineKeyboardButton("🛑 ايقاف" if s['running'] else "✅ تشغيل محترف 85%+ (15m)", callback_data="qx_stop" if s['running'] else "qx_start"))
+    mk.add(InlineKeyboardButton("⬅️ رجوع", callback_data="back_main"))
+    return mk
+
 def main_menu():
-    mk=InlineKeyboardMarkup(row_width=1)
-    mk.add(InlineKeyboardButton("🤖 كوتكس تلقائي", callback_data="qa"))
-    mk.add(InlineKeyboardButton("📈 بوكت اوبشن تلقائي", callback_data="pa"))
-    mk.add(InlineKeyboardButton("📊 اشارات فقط", callback_data="sig"))
-    return mk
-
-def q_menu(uid):
-    s=qs.get(uid,{"amount":25,"trades":4,"running":False})
-    mk=InlineKeyboardMarkup(row_width=3)
-    mk.add(InlineKeyboardButton(f"💰 {s['amount']}", callback_data="none"))
-    mk.add(InlineKeyboardButton("10", callback_data="qa_10"),InlineKeyboardButton("25", callback_data="qa_25"),InlineKeyboardButton("50", callback_data="qa_50"))
-    mk.add(InlineKeyboardButton(f"🔢 {s['trades']}", callback_data="none"))
-    mk.add(InlineKeyboardButton("2", callback_data="qt_2"),InlineKeyboardButton("4", callback_data="qt_4"),InlineKeyboardButton("6", callback_data="qt_6"))
-    mk.add(InlineKeyboardButton("🔐 دخول كوتكس", callback_data="qx_login"))
-    mk.add(InlineKeyboardButton("🛑 وقف" if s['running'] else "✅ تشغيل كوتكس", callback_data="qx_stop" if s['running'] else "qx_start"))
-    mk.add(InlineKeyboardButton("⬅️ رجوع", callback_data="back_main"))
-    return mk
-
-def p_menu(uid):
-    s=ps.get(uid,{"amount":25,"trades":4,"running":False})
-    mk=InlineKeyboardMarkup(row_width=3)
-    mk.add(InlineKeyboardButton(f"💰 {s['amount']}", callback_data="none2"))
-    mk.add(InlineKeyboardButton("10", callback_data="pa_10"),InlineKeyboardButton("25", callback_data="pa_25"),InlineKeyboardButton("50", callback_data="pa_50"))
-    mk.add(InlineKeyboardButton(f"🔢 {s['trades']}", callback_data="none2"))
-    mk.add(InlineKeyboardButton("2", callback_data="pt_2"),InlineKeyboardButton("4", callback_data="pt_4"),InlineKeyboardButton("6", callback_data="pt_6"))
-    mk.add(InlineKeyboardButton("🔐 دخول بوكت", callback_data="po_login"))
-    mk.add(InlineKeyboardButton("🛑 وقف" if s['running'] else "✅ تشغيل بوكت", callback_data="po_stop" if s['running'] else "po_start"))
-    mk.add(InlineKeyboardButton("⬅️ رجوع", callback_data="back_main"))
+    mk = InlineKeyboardMarkup(row_width=1)
+    mk.add(InlineKeyboardButton("📈 بوكت اوبشن - اشارات Triple TF", callback_data="mode_pocket"))
+    mk.add(InlineKeyboardButton("🤖 كوتكس بوت محترف - 85%+", callback_data="mode_quotex"))
     return mk
 
 @bot.message_handler(commands=['start'])
@@ -94,145 +133,141 @@ def start(msg):
     if not is_allowed(msg.from_user.id):
         bot.send_message(msg.chat.id, "🔒 خاص\nارسل /pass ثم الرقم السري")
         return
-    bot.send_message(msg.chat.id, "اختار المنصة:", reply_markup=main_menu())
+    bot.send_message(msg.chat.id, "👋 بوت محترف - Triple TF + RSI + EMA + MACD\nاختر المنصة:", reply_markup=main_menu())
 
 @bot.callback_query_handler(func=lambda c: c.data=="back_main")
-def back_main_c(call):
-    bot.edit_message_text("اختار المنصة:", call.message.chat.id, call.message.message_id, reply_markup=main_menu())
+def back_main_h(call):
+    bot.edit_message_text("👋 بوت محترف - Triple TF + RSI + EMA + MACD\nاختر المنصة:", call.message.chat.id, call.message.message_id, reply_markup=main_menu())
 
-@bot.callback_query_handler(func=lambda c: c.data=="qa")
-def qa_menu(call):
-    if call.from_user.id not in qs: qs[call.from_user.id]={"amount":25,"trades":4,"running":False,"email":None}
-    bot.edit_message_text("🤖 كوتكس تلقائي", call.message.chat.id, call.message.message_id, reply_markup=q_menu(call.from_user.id))
+@bot.callback_query_handler(func=lambda c: c.data=="mode_pocket")
+def mode_pocket(call):
+    markup = InlineKeyboardMarkup(row_width=2)
+    for name in MARKETS:
+        markup.add(InlineKeyboardButton(name, callback_data=f"market_{name}"))
+    bot.send_message(call.message.chat.id, "📈 بوكت اوبشن - اختر السوق:", reply_markup=markup)
 
-@bot.callback_query_handler(func=lambda c: c.data=="pa")
-def pa_menu_c(call):
-    if call.from_user.id not in ps: ps[call.from_user.id]={"amount":25,"trades":4,"running":False,"email":None}
-    bot.edit_message_text("📈 بوكت اوبشن تلقائي", call.message.chat.id, call.message.message_id, reply_markup=p_menu(call.from_user.id))
+@bot.callback_query_handler(func=lambda c: c.data=="mode_quotex")
+def mode_quotex(call):
+    if call.from_user.id not in qs:
+        qs[call.from_user.id] = {"amount": 20, "trades": 6, "running": False, "email": None}
+    bot.edit_message_text("🤖 كوتكس محترف\n85%+ | RSI فلتر | EMA ترند | MACD تأكيد\nمدة 15m", call.message.chat.id, call.message.message_id, reply_markup=quotex_menu(call.from_user.id))
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("qa_"))
-def set_a_q(call):
-    qs[call.from_user.id]["amount"]=int(call.data.replace("qa_",""))
-    bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=q_menu(call.from_user.id))
-@bot.callback_query_handler(func=lambda c: c.data.startswith("qt_"))
-def set_t_q(call):
-    qs[call.from_user.id]["trades"]=int(call.data.replace("qt_",""))
-    bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=q_menu(call.from_user.id))
+def set_amount_q(call):
+    qs[call.from_user.id]["amount"] = int(call.data.replace("qa_",""))
+    bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=quotex_menu(call.from_user.id))
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith("pa_"))
-def set_a_p(call):
-    ps[call.from_user.id]["amount"]=int(call.data.replace("pa_",""))
-    bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=p_menu(call.from_user.id))
-@bot.callback_query_handler(func=lambda c: c.data.startswith("pt_"))
-def set_t_p(call):
-    ps[call.from_user.id]["trades"]=int(call.data.replace("pt_",""))
-    bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=p_menu(call.from_user.id))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("qt_"))
+def set_trades_q(call):
+    qs[call.from_user.id]["trades"] = int(call.data.replace("qt_",""))
+    bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=quotex_menu(call.from_user.id))
 
 @bot.callback_query_handler(func=lambda c: c.data=="qx_login")
-def ql(call): bot.send_message(call.message.chat.id, "ارسل:\n/login ايميلك باسوردك")
-@bot.callback_query_handler(func=lambda c: c.data=="po_login")
-def pl(call): bot.send_message(call.message.chat.id, "ارسل:\n/pologin ايميلك باسوردك")
+def qx_login_btn(call):
+    bot.send_message(call.message.chat.id, "ارسل:\n/login ايميلك باسوردك")
 
 @bot.message_handler(commands=['login'])
 def login_q(m):
     try: bot.delete_message(m.chat.id, m.message_id)
     except: pass
-    p=m.text.split()
-    if len(p)<3: return
-    if m.from_user.id not in qs: qs[m.from_user.id]={"amount":25,"trades":4,"running":False}
-    qs[m.from_user.id]["email"]=p[1]; qs[m.from_user.id]["password"]=p[2]
-    bot.send_message(m.chat.id,f"✅ كوتكس: {p[1]}")
+    parts = m.text.split()
+    if len(parts) < 3: return
+    if m.from_user.id not in qs:
+        qs[m.from_user.id] = {"amount": 20, "trades": 6, "running": False}
+    qs[m.from_user.id]["email"] = parts[1]
+    qs[m.from_user.id]["password"] = parts[2]
+    bot.send_message(m.chat.id, f"✅ تم حفظ كوتكس: {parts[1]}")
 
-@bot.message_handler(commands=['pologin'])
-def login_p(m):
-    try: bot.delete_message(m.chat.id, m.message_id)
-    except: pass
-    p=m.text.split()
-    if len(p)<3: return
-    if m.from_user.id not in ps: ps[m.from_user.id]={"amount":25,"trades":4,"running":False}
-    ps[m.from_user.id]["email"]=p[1]; ps[m.from_user.id]["password"]=p[2]
-    bot.send_message(m.chat.id,f"✅ بوكت: {p[1]}")
-
-# تشغيل كوتكس
-def runner_q(uid,cid):
+def runner_quotex(uid, cid):
     try:
         from quotexapi.stable_api import Quotex
-        s=qs[uid]; qx=Quotex(s["email"], s["password"])
-        ok,rea=qx.connect()
-        if not ok: return bot.send_message(cid,f"❌ {rea}")
-        bot.send_message(cid,f"✅ كوتكس دخل | {s['amount']}"); done=0
-        while qs[uid]["running"] and done<s["trades"]:
+        s = qs[uid]
+        qx = Quotex(s["email"], s["password"])
+        ok, reason = qx.connect()
+        if not ok:
+            return bot.send_message(cid, f"❌ فشل: {reason}")
+        start_bal = qx.get_balance()
+        bot.send_message(cid, f"✅ محترف دخل | رصيد: {start_bal}$\n🎯 {s['trades']} صفقات | {s['amount']}﷼ | فلتر RSI+EMA+MACD | 15m")
+        done = 0
+        wins = 0
+        while qs[uid]["running"] and done < s["trades"]:
             for name,sym in MARKETS.items():
-                if not qs[uid]["running"] or done>=s["trades"]: break
-                d,per=confluence(sym)
-                if d!="NO_TRADE" and per>=85:
-                    usd=round(s["amount"]/3.75,2)
-                    st,_id=qx.buy(usd,sym,d.lower(),1)
-                    if st:
-                        done+=1; bot.send_message(cid,f"✅ #{done} {name} {d} {per}%"); time.sleep(70)
-            time.sleep(10)
-        qs[uid]["running"]=False; bot.send_message(cid,"🏁 خلص كوتكس")
-    except Exception as e: bot.send_message(cid,f"❌ {e}")
-
-# تشغيل بوكت
-def runner_p(uid,cid):
-    try:
-        from pocketoptionapi import PocketOption
-        s=ps[uid]; po=PocketOption(s["email"], s["password"])
-        ok=po.connect()
-        if not ok: return bot.send_message(cid,"❌ فشل بوكت")
-        bot.send_message(cid,f"✅ بوكت دخل | {s['amount']}"); done=0
-        while ps[uid]["running"] and done<s["trades"]:
-            for name,sym in MARKETS.items():
-                if not ps[uid]["running"] or done>=s["trades"]: break
-                d,per=confluence(sym)
-                if d!="NO_TRADE" and per>=85:
-                    st=po.buy(sym, s["amount"], d.lower(), 1)
-                    if st:
-                        done+=1; bot.send_message(cid,f"✅ بوكت #{done} {name} {d} {per}%"); time.sleep(70)
-            time.sleep(10)
-        ps[uid]["running"]=False; bot.send_message(cid,"🏁 خلص بوكت")
-    except Exception as e: bot.send_message(cid,f"❌ بوكت: {e} - تأكد من مكتبة pocketoptionapi")
+                if not qs[uid]["running"] or done >= s["trades"]: break
+                d, per, detail = get_confluence_85(sym)
+                if d!= "NO_TRADE":
+                    usd = round(s["amount"] / 3.75, 2)
+                    status, _id = qx.buy(usd, sym, d.lower(), 15)
+                    if status:
+                        done += 1
+                        bot.send_message(cid, f"🔥 صفقة محترفة #{done}/{s['trades']}\n{name}\n{d} {per}%\n{detail}\n💰 {s['amount']}﷼ - 15m")
+                        time.sleep(75)
+            time.sleep(20)
+        qs[uid]["running"] = False
+        try:
+            end_bal = qx.get_balance()
+            profit = round(end_bal - start_bal, 2)
+            bot.send_message(cid, f"🏁 انتهى البوت المحترف\n📊 نفذ: {done}/{s['trades']}\n💰 ربح: {profit}$\nرصيد: {end_bal}$")
+        except:
+            bot.send_message(cid, f"🏁 انتهى {done} صفقات")
+    except Exception as e:
+        bot.send_message(cid, f"❌ خطأ: {e}")
 
 @bot.callback_query_handler(func=lambda c: c.data=="qx_start")
-def qs_start(call):
-    if qs[call.from_user.id].get("email") is None: return bot.send_message(call.message.chat.id,"/login اول")
-    qs[call.from_user.id]["running"]=True
-    threading.Thread(target=runner_q, args=(call.from_user.id, call.message.chat.id), daemon=True).start()
-    bot.answer_callback_query(call.id, "بدأ كوتكس")
+def qx_start(call):
+    if qs[call.from_user.id].get("email") is None:
+        return bot.answer_callback_query(call.id, "سجل دخول اول")
+    qs[call.from_user.id]["running"] = True
+    threading.Thread(target=runner_quotex, args=(call.from_user.id, call.message.chat.id), daemon=True).start()
+    bot.answer_callback_query(call.id, "بدأ المحترف")
+
 @bot.callback_query_handler(func=lambda c: c.data=="qx_stop")
-def qs_stop(call):
-    qs[call.from_user.id]["running"]=False; bot.answer_callback_query(call.id, "وقف")
+def qx_stop(call):
+    qs[call.from_user.id]["running"] = False
+    bot.answer_callback_query(call.id, "وقف")
 
-@bot.callback_query_handler(func=lambda c: c.data=="po_start")
-def ps_start(call):
-    if ps[call.from_user.id].get("email") is None: return bot.send_message(call.message.chat.id,"/pologin اول")
-    ps[call.from_user.id]["running"]=True
-    threading.Thread(target=runner_p, args=(call.from_user.id, call.message.chat.id), daemon=True).start()
-    bot.answer_callback_query(call.id, "بدأ بوكت")
-@bot.callback_query_handler(func=lambda c: c.data=="po_stop")
-def ps_stop(call):
-    ps[call.from_user.id]["running"]=False; bot.answer_callback_query(call.id, "وقف")
+@bot.callback_query_handler(func=lambda c: c.data.startswith("market_"))
+def choose_market(call):
+    bot.answer_callback_query(call.id)
+    name = call.data.replace("market_", "")
+    user_data[call.from_user.id] = MARKETS[name], name
+    markup = InlineKeyboardMarkup(row_width=1)
+    markup.add(InlineKeyboardButton("🔍 فحص شامل H1+15m+5m", callback_data="time_ALL"))
+    markup.add(InlineKeyboardButton("5m فقط", callback_data="time_5"), InlineKeyboardButton("15m فقط", callback_data="time_15"))
+    bot.send_message(call.message.chat.id, f"اخترت {name}\nاختر نوع الفحص:", reply_markup=markup)
 
-@bot.callback_query_handler(func=lambda c: c.data=="sig")
-def sigs(call):
-    txt="📊 اشارات لايف:\n"
-    for name,sym in list(MARKETS.items())[:8]:
-        d,per=confluence(sym)
-        if d!="NO_TRADE": txt+=f"{name} {d} {per}%\n"
-    bot.send_message(call.message.chat.id, txt if txt!="📊 اشارات لايف:\n" else "لا يوجد اشارات قوية حاليا")
+@bot.callback_query_handler(func=lambda c: c.data.startswith("time_"))
+def choose_time(call):
+    user_id = call.from_user.id
+    now = time.time()
+    if user_id in last_request and now - last_request[user_id] < 5:
+        bot.answer_callback_query(call.id, "⏳ انتظر")
+        return
+    last_request[user_id] = now
+    bot.answer_callback_query(call.id)
+    mode = call.data.replace("time_", "")
+    symbol, name = user_data.get(user_id, (None, None))
+    if not symbol: return
+    loading = bot.send_message(call.message.chat.id, f"⏳ جاري فحص {name}...")
+    if mode == "ALL":
+        direction, percent, details = get_confluence_signal(symbol)
+        if direction == "NO_TRADE":
+            bot.edit_message_text(f"📊 {name}\n{details}", call.message.chat.id, loading.message_id)
+            return
+        emoji = "🟢 BUY صعود" if direction == "BUY" else "🔴 SELL هبوط"
+        bot.edit_message_text(f"📊 {name}\n{emoji}\n💪 ثقة: {percent}%\n\n{details}", call.message.chat.id, loading.message_id)
+    else:
+        tf_map = {"5": Interval.INTERVAL_5_MINUTES, "15": Interval.INTERVAL_15_MINUTES}
+        d, p = get_tf_signal(symbol, tf_map[mode])
+        bot.edit_message_text(f"📊 {name} {mode}m\n{'🟢 BUY' if d=='BUY' else '🔴 SELL'}\n💪 {p}%\n\n{'✅ ادخل' if p>=80 else '❌ لا تدخل'}", call.message.chat.id, loading.message_id)
 
-app=Flask(__name__)
+app = Flask(__name__)
 @app.route('/')
-def home(): return "Live OK"
-def run_bot():
-    bot.remove_webhook(); time.sleep(3)
-    while True:
-        try:
-            logging.info("polling start")
-            bot.infinity_polling(skip_pending=True, timeout=30, long_polling_timeout=30)
-        except:
-            time.sleep(5)
-if __name__ == "__main__":
-    threading.Thread(target=run_bot, daemon=True).start()
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT",10000)))
+def home(): return "Bot is Live - Pro 85%+"
+def run_flask():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
+
+threading.Thread(target=run_flask, daemon=True).start()
+bot.remove_webhook()
+time.sleep(1)
+bot.infinity_polling(skip_pending=True)
