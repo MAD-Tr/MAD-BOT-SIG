@@ -268,5 +268,10 @@ def run_flask():
 
 threading.Thread(target=run_flask, daemon=True).start()
 bot.remove_webhook()
-time.sleep(1)
-bot.infinity_polling(skip_pending=True)
+time.sleep(2)
+while True:
+    try:
+        bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=60)
+    except Exception as e:
+        print(f"Polling error {e}, retry in 5s")
+        time.sleep(5)
