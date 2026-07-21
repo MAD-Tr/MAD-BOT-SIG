@@ -1,4 +1,4 @@
 pyTelegramBotAPI
 tradingview-ta
 Flask
-git+https://github.com/cleitonleonel/pyquotex.git
+quotexapi
