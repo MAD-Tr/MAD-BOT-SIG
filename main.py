@@ -1,13 +1,12 @@
-import os
-import time
-import threading
-from flask import Flask
+import os, time, threading
+from flask import Flask, request
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from tradingview_ta import TA_Handler, Interval
 
-TOKEN = ""
+TOKEN = os.getenv("BOT_TOKEN") # لا تحط التوكن هنا - حطه في Render Environment
 bot = telebot.TeleBot(TOKEN, threaded=False)
+app = Flask(__name__)
 
 MARKETS = {
     "🇪🇺/🇺🇸 EUR/USD": "EURUSD", "🇬🇧/🇺🇸 GBP/USD": "GBPUSD", "🇺🇸/🇯🇵 USD/JPY": "USDJPY",
@@ -41,7 +40,6 @@ def get_confluence_signal(symbol):
     d15, p15 = get_tf_signal(symbol, Interval.INTERVAL_15_MINUTES)
     d1h, p1h = get_tf_signal(symbol, Interval.INTERVAL_1_HOUR)
 
-    # القرار التلقائي
     if d5 == d15 == d1h and d5!= "ERROR":
         if p5 >= 80 and p15 >= 80 and p1h >= 80:
             decision = "🔥🔥 دخول قوي ذهبي - ادخل 2% 🔥🔥"
@@ -102,14 +100,16 @@ def choose_time(call):
         d, p = get_tf_signal(symbol, tf_map[mode])
         bot.edit_message_text(f"📊 {name} {mode}m\n{'🟢 BUY' if d=='BUY' else '🔴 SELL'}\n💪 {p}%\n\n{'✅ ادخل' if p>=80 else '❌ لا تدخل'}", call.message.chat.id, loading.message_id)
 
-app = Flask(__name__)
-@app.route('/')
+@app.route('/', methods=["GET"])
 def home(): return "Bot is Live!"
-def run_flask():
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
 
-threading.Thread(target=run_flask, daemon=True).start()
-bot.remove_webhook()
-time.sleep(1)
-bot.infinity_polling(skip_pending=True)
+@app.route(f"/{TOKEN}", methods=["POST"])
+def webhook():
+    bot.process_new_updates([telebot.types.Update.de_json(request.get_json(force=True))])
+    return "ok"
+
+if __name__ == "__main__":
+    bot.remove_webhook()
+    time.sleep(1)
+    bot.set_webhook(url=f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}/{TOKEN}")
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
