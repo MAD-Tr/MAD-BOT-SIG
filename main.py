@@ -15,11 +15,25 @@ def is_allowed(uid): return uid in allowed
 @bot.message_handler(commands=['pass'])
 def pass_check(m):
     try:
+        # يمسح رسالتك اللي فيها الباسورد فوراً
+        try: bot.delete_message(m.chat.id, m.message_id)
+        except: pass
+
         if m.text.split()[1] == PASSWORD:
             allowed.add(m.from_user.id)
-            bot.reply_to(m, "✅ تم /start")
-        else: bot.reply_to(m, "❌ غلط")
-    except: bot.reply_to(m, "/pass 7154")
+            msg = bot.send_message(m.chat.id, "✅ تم الدخول - اكتب /start\n(الرسالة بتنحذف بعد 3 ثواني)")
+            # يمسح رسالة التأكيد بعد 3 ثواني
+            time.sleep(3)
+            try: bot.delete_message(m.chat.id, msg.message_id)
+            except: pass
+        else:
+            msg = bot.send_message(m.chat.id, "❌ غلط")
+            time.sleep(3)
+            try: bot.delete_message(m.chat.id, msg.message_id)
+            except: pass
+    except:
+        try: bot.delete_message(m.chat.id, m.message_id)
+        except: pass
 
 MARKETS = {
     "🇪🇺/🇺🇸 EUR/USD": "EURUSD",
