@@ -1,6 +1,14 @@
 import os
 import time
 import threading
+import subprocess, sys
+
+# تثبيت مكتبة كوتكس من قيثب تلقائياً
+try:
+    import quotexapi
+except:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "git+https://github.com/cleitonleonel/pyquotex.git"])
+
 from flask import Flask
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -250,7 +258,7 @@ def choose_time(call):
     else:
         tf_map = {"5": Interval.INTERVAL_5_MINUTES, "15": Interval.INTERVAL_15_MINUTES}
         mode = call.data.replace("time_", "")
-        d, p = get_tf_signal(symbol, tf_map)
+        d, p = get_tf_signal(symbol, tf_map[mode])
         bot.edit_message_text(f"📊 {name} {mode}m\n{'🟢 BUY' if d=='BUY' else '🔴 SELL'}\n💪 {p}%", call.message.chat.id, loading.message_id)
 
 app = Flask(__name__)
