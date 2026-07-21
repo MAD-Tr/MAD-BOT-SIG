@@ -3,7 +3,6 @@ import time
 import threading
 import subprocess, sys
 
-# تثبيت مكتبة كوتكس من قيثب تلقائياً
 try:
     import quotexapi
 except:
@@ -84,7 +83,7 @@ def get_confluence_signal(symbol):
 @bot.message_handler(commands=['start'])
 def start(msg):
     if not is_allowed(msg.from_user.id):
-        bot.send_message(msg.chat.id, "🔒 البوت خاص\n/pass 7154")
+        bot.send_message(msg.chat.id, "🔒 البوت خاص\n\nادخل الرقم السري:\n/pass [الرقم]")
         return
     markup = InlineKeyboardMarkup(row_width=1)
     markup.add(InlineKeyboardButton("منصة بوكت أوبشن", callback_data="platform_pocket"))
@@ -258,7 +257,7 @@ def choose_time(call):
     else:
         tf_map = {"5": Interval.INTERVAL_5_MINUTES, "15": Interval.INTERVAL_15_MINUTES}
         mode = call.data.replace("time_", "")
-        d, p = get_tf_signal(symbol, tf_map[mode])
+        d, p = get_tf_signal(symbol, tf_map)
         bot.edit_message_text(f"📊 {name} {mode}m\n{'🟢 BUY' if d=='BUY' else '🔴 SELL'}\n💪 {p}%", call.message.chat.id, loading.message_id)
 
 app = Flask(__name__)
