@@ -4,3 +4,4 @@ tradingview-ta
 requests
 websocket-client
 pyaes
+quotexapi
