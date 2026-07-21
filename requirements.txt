@@ -1,4 +1,5 @@
 pyTelegramBotAPI
-tradingview-ta
 Flask
-git+https://github.com/cleitonleonel/pyquotex.git
+tradingview-ta
+quotexapi
+pocketoptionapi
