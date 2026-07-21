@@ -40,31 +40,34 @@ def get_ta(symbol, interval):
         buy = analysis.summary["BUY"]
         sell = analysis.summary["SELL"]
         rsi = analysis.indicators.get("RSI", 50)
-        total = buy + sell
-        perc = int((buy / total * 100)) if rec == "BUY" else int((sell / total * 100)) if rec == "SELL" else 50
+        perc = int((buy / 26 * 100)) if "BUY" in rec else int((sell / 26 * 100)) if "SELL" in rec else 50
         return rec, perc, rsi
     except:
-        return "NEUTRAL", 50, 50
+        return "NEUTRAL", 0, 50
 
 def get_confluence_signal(symbol):
     rec_h1, p_h1, rsi_h1 = get_ta(symbol, Interval.INTERVAL_1_HOUR)
     rec_15, p_15, rsi_15 = get_ta(symbol, Interval.INTERVAL_15_MINUTES)
     rec_5, p_5, rsi_5 = get_ta(symbol, Interval.INTERVAL_5_MINUTES)
     rsi = rsi_5
-    if rec_h1 == rec_15 == rec_5 and rec_h1 in ["BUY", "SELL"]:
-        avg_p = int((p_h1 + p_15 + p_5) / 3)
-        if avg_p >= 75:
-            if 30 < rsi < 70:
-                decision = f"🔥🔥 ذهبي قوي - RSI {round(rsi,1)} ممتاز - ادخل 2%"
-            else:
-                decision = f"⚠️ قوي بس RSI {round(rsi,1)} متشبع - ادخل 1% فقط"
-        else:
-            decision = "متوسط"
-        det = f"H1:{p_h1}% {rec_h1} | 15m:{p_15}% {rec_15} | 5m:{p_5}% {rec_5}\nRSI: {round(rsi,1)}"
-        return rec_h1, avg_p, det, decision
+    if "BUY" in rec_h1 and "BUY" in rec_15 and "BUY" in rec_5:
+        d = "BUY"
+    elif "SELL" in rec_h1 and "SELL" in rec_15 and "SELL" in rec_5:
+        d = "SELL"
     else:
         det = f"H1:{p_h1}% {rec_h1} | 15m:{p_15}% {rec_15} | 5m:{p_5}% {rec_5}"
         return "NEUTRAL", 0, det, "❌ غير متطابق"
+
+    avg_p = int((p_h1 + p_15 + p_5) / 3)
+    if avg_p >= 75:
+        if 30 < rsi < 70:
+            decision = f"🔥🔥 ذهبي قوي - RSI {round(rsi,1)} ممتاز - ادخل 2%"
+        else:
+            decision = f"⚠️ قوي بس RSI {round(rsi,1)} متشبع - ادخل 1% فقط"
+    else:
+        decision = "متوسط"
+    det = f"H1:{p_h1}% {rec_h1} | 15m:{p_15}% {rec_15} | 5m:{p_5}% {rec_5}\nRSI: {round(rsi,1)}"
+    return d, avg_p, det, decision
 
 @bot.message_handler(commands=['start'])
 def start(m):
@@ -74,7 +77,7 @@ def start(m):
         markup.add(types.InlineKeyboardButton("📊 فحص سوق واحد", callback_data="single"))
         bot.send_message(m.chat.id, "اهلا - اختر:", reply_markup=markup)
     else:
-        bot.send_message(m.chat.id, "🔒 ارسل كلمة السر للدخول:")
+        bot.send_message(m.chat.id, "🔒 ارسل كلمة السر:")
 
 @bot.message_handler(func=lambda m: m.from_user.id not in authorized)
 def check_pass(m):
@@ -83,7 +86,7 @@ def check_pass(m):
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🔥 البحث عن الفرصة الذهبية", callback_data="golden"))
         markup.add(types.InlineKeyboardButton("📊 فحص سوق واحد", callback_data="single"))
-        bot.send_message(m.chat.id, "✅ تم فتح البوت - حياك", reply_markup=markup)
+        bot.send_message(m.chat.id, "✅ تم فتح البوت", reply_markup=markup)
     else:
         bot.send_message(m.chat.id, "❌ كلمة سر غلط")
 
