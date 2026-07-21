@@ -72,39 +72,31 @@ def get_confluence_signal(symbol):
         return d5, final, f"H1:{p1h}% | 15m:{p15}% | 5m:{p5}%\n{decision}"
     return "NO_TRADE", 0, f"H1:{p1h}% {d1h} | 15m:{p15}% {d15} | 5m:{p5}% {d5}\n\n❌ لا تدخل - السوق متضارب"
 
-# ===== النسخة المحترفة - تداول كالمحترفين =====
 def get_confluence_85(symbol):
     try:
         h5 = TA_Handler(symbol=symbol, screener="forex", exchange="FX", interval=Interval.INTERVAL_5_MINUTES).get_analysis()
         h15 = TA_Handler(symbol=symbol, screener="forex", exchange="FX", interval=Interval.INTERVAL_15_MINUTES).get_analysis()
         h1h = TA_Handler(symbol=symbol, screener="forex", exchange="FX", interval=Interval.INTERVAL_1_HOUR).get_analysis()
-
         d5, p5 = get_tf_signal(symbol, Interval.INTERVAL_5_MINUTES)
         d15, p15 = get_tf_signal(symbol, Interval.INTERVAL_15_MINUTES)
         d1h, p1h = get_tf_signal(symbol, Interval.INTERVAL_1_HOUR)
-
         if not (d5 == d15 == d1h and d5 in ["BUY","SELL"]):
             return "NO_TRADE", 0, ""
-
         avg = int((p5+p15+p1h)/3)
         if avg < 85:
             return "NO_TRADE", 0, ""
-
         rsi5 = h5.indicators.get("RSI", 50)
         rsi15 = h15.indicators.get("RSI", 50)
         if d5=="BUY" and (rsi5>75 or rsi15>75): return "NO_TRADE",0,f"RSI متشبع {int(rsi5)}"
         if d5=="SELL" and (rsi5<25 or rsi15<25): return "NO_TRADE",0,f"RSI متشبع {int(rsi5)}"
-
         ema20_1h = h1h.indicators.get("EMA20",0)
         ema50_1h = h1h.indicators.get("EMA50",0)
         if d5=="BUY" and ema20_1h < ema50_1h: return "NO_TRADE",0,"عكس الترند"
         if d5=="SELL" and ema20_1h > ema50_1h: return "NO_TRADE",0,"عكس الترند"
-
         macd_15 = h15.indicators.get("MACD.macd",0)
         macd_sig_15 = h15.indicators.get("MACD.signal",0)
         if d5=="BUY" and macd_15 < macd_sig_15: return "NO_TRADE",0,"MACD سلبي"
         if d5=="SELL" and macd_15 > macd_sig_15: return "NO_TRADE",0,"MACD ايجابي"
-
         return d5, min(94, avg+5), f"5m:{p5}% 15m:{p15}% 1h:{p1h}% | RSI:{int(rsi5)} EMA:OK MACD:OK"
     except:
         return "NO_TRADE",0,""
@@ -180,7 +172,15 @@ def login_q(m):
 
 def runner_quotex(uid, cid):
     try:
-        from quotexapi.stable_api import Quotex
+        # ===== هنا التعديل اللي يصلح الخطأ =====
+        try:
+            from quotexapi.stable_api import Quotex
+        except:
+            import subprocess, sys
+            bot.send_message(cid, "⏳ أول مرة - جاري تثبيت مكتبة كوتكس 30 ثانية...")
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "git+https://github.com/cleitonleonel/quotexapi.git", "--quiet"])
+            from quotexapi.stable_api import Quotex
+
         s = qs[uid]
         qx = Quotex(s["email"], s["password"])
         ok, reason = qx.connect()
@@ -189,7 +189,6 @@ def runner_quotex(uid, cid):
         start_bal = qx.get_balance()
         bot.send_message(cid, f"✅ محترف دخل | رصيد: {start_bal}$\n🎯 {s['trades']} صفقات | {s['amount']}﷼ | فلتر RSI+EMA+MACD | 15m")
         done = 0
-        wins = 0
         while qs[uid]["running"] and done < s["trades"]:
             for name,sym in MARKETS.items():
                 if not qs[uid]["running"] or done >= s["trades"]: break
