@@ -52,16 +52,35 @@ def get_confluence_signal(symbol):
             decision = "❌ لا تدخل - ثقة ضعيفة"
         avg = int((p5+p15+p1h)/3)
         final = min(94, avg+5)
-        return d5, final, f"H1:{p1h}% | 15m:{p15}% | 5m:{p5}%\n{decision}"
+        return d5, final, f"H1:{p1h}% | 15m:{p15}% | 5m:{p5}%\n{decision}", decision
 
-    return "NO_TRADE", 0, f"H1:{p1h}% {d1h} | 15m:{p15}% {d15} | 5m:{p5}% {d5}\n\n❌ لا تدخل - السوق متضارب"
+    return "NO_TRADE", 0, f"H1:{p1h}% {d1h} | 15m:{p15}% {d15} | 5m:{p5}% {d5}\n\n❌ لا تدخل - السوق متضارب", "متضارب"
 
 @bot.message_handler(commands=['start'])
 def start(msg):
     markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(InlineKeyboardButton("🔥 البحث عن الفرصة الذهبية (5m+15m+1h)", callback_data="golden"))
     for name in MARKETS:
         markup.add(InlineKeyboardButton(name, callback_data=f"market_{name}"))
-    bot.send_message(msg.chat.id, "👋 بوت احترافي Triple TF\nاختر السوق:", reply_markup=markup)
+    bot.send_message(msg.chat.id, "👋 بوت احترافي Triple TF\nاختر:", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda c: c.data=="golden")
+def golden(call):
+    bot.answer_callback_query(call.id, "⏳ افحص 25 سوق...")
+    loading = bot.send_message(call.message.chat.id, "⏳ جاري فحص 25 سوق 5m+15m+1h...\nياخذ 40 ثانية")
+    goldens = []
+    for name, sym in MARKETS.items():
+        d, p, det, dec = get_confluence_signal(sym)
+        if "ذهبي" in dec:
+            emoji = "🟢 BUY" if d=="BUY" else "🔴 SELL"
+            goldens.append(f"{emoji} {name} - {p}%\n{det}\n")
+        time.sleep(0.4)
+
+    if not goldens:
+        bot.edit_message_text("❌ لا يوجد فرص ذهبية الان - كل الاسواق متضاربة\nجرب بعد 5 دقايق", call.message.chat.id, loading.message_id)
+    else:
+        txt = "🔥🔥 الفرص الذهبية (5m+15m+1h متطابقين 80%+) 🔥🔥\n\n" + "\n".join(goldens)
+        bot.edit_message_text(txt, call.message.chat.id, loading.message_id)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("market_"))
 def choose_market(call):
@@ -90,7 +109,7 @@ def choose_time(call):
     loading = bot.send_message(call.message.chat.id, f"⏳ جاري فحص {name}...")
 
     if mode == "ALL":
-        direction, percent, details = get_confluence_signal(symbol)
+        direction, percent, details, dec = get_confluence_signal(symbol)
         if direction == "NO_TRADE":
             bot.edit_message_text(f"📊 {name}\n{details}", call.message.chat.id, loading.message_id)
             return
