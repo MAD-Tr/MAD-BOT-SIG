@@ -12,16 +12,28 @@ def is_allowed(uid): return uid in allowed
 
 @bot.message_handler(commands=['pass'])
 def pass_check(m):
+    if m.chat.type!= "private":
+        try: bot.delete_message(m.chat.id, m.message_id)
+        except: pass
+        return bot.send_message(m.chat.id, "🔒 الرقم في الخاص فقط")
     try: bot.delete_message(m.chat.id, m.message_id)
     except: pass
     try:
         if m.text.split()[1] == PASSWORD:
             allowed.add(m.from_user.id)
-            msg = bot.send_message(m.chat.id, "✅ تم - ارسل /start")
-            time.sleep(2)
-            try: bot.delete_message(m.chat.id, msg.message_id)
-            except: pass
-    except: pass
+            bot.send_message(m.chat.id, "✅ تم - ارسل /start", reply_markup=main_menu())
+    except:
+        bot.send_message(m.chat.id, "❌ رقم خطأ")
+
+@bot.message_handler(commands=['start'])
+def start(msg):
+    if msg.chat.type!= "private":
+        mk = InlineKeyboardMarkup()
+        mk.add(InlineKeyboardButton("🔐 افتح الخاص", url=f"https://t.me/{bot.get_me().username}?start=start"))
+        return bot.send_message(msg.chat.id, "🔒 خاص - اضغط الزر:", reply_markup=mk)
+    if not is_allowed(msg.from_user.id):
+        return bot.send_message(msg.chat.id, "🔒 ارسل:\n/pass 7154")
+    bot.send_message(msg.chat.id,"👋 بوت محترف - 85%+\nاختر:", reply_markup=main_menu())
 
 MARKETS = {"🇪🇺/🇺🇸 EUR/USD":"EURUSD","🇬🇧/🇺🇸 GBP/USD":"GBPUSD","🇺🇸/🇯🇵 USD/JPY":"USDJPY","🇦🇺/🇺🇸 AUD/USD":"AUDUSD","🇺🇸/🇨🇦 USD/CAD":"USDCAD","🇪🇺/🇯🇵 EUR/JPY":"EURJPY","🇪🇺/🇺🇸 EUR/USD OTC":"EURUSD","🇬🇧/🇺🇸 GBP/USD OTC":"GBPUSD"}
 
