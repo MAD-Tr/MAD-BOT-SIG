@@ -5,7 +5,7 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from tradingview_ta import TA_Handler, Interval
 import pandas as pd
 
-TOKEN = "8828337019:AAFW_gB43Hqrueg1bP9y3RJKHGFUGWR9LUw"
+TOKEN = "8828337019:AAHgUTyjrxMk7IkJpMZzseKbroltKInaCes"
 PASSWORD = "7154"
 bot = telebot.TeleBot(TOKEN, threaded=False)
 
