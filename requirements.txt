@@ -2,4 +2,5 @@ pyTelegramBotAPI
 Flask
 tradingview-ta
 requests
-git+https://github.com/cleitonleonel/quotexapi.git
+websocket-client
+pyaes
