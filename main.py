@@ -1,147 +1,134 @@
-import os, time, threading, yfinance as yf
-from flask import Flask
 import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from telebot import types
+import threading
+from flask import Flask
 from tradingview_ta import TA_Handler, Interval
-import pandas as pd
+import time
+import os
 
-TOKEN = "8828337019:AAHgUTyjrxMk7IkJpMZzseKbroltKInaCes"
-PASSWORD = "7154"
-bot = telebot.TeleBot(TOKEN, threaded=False)
+TOKEN = os.environ.get("TOKEN") or "8828337019:AAHgUTyjrxMk7IkJpMZzseKbroltKInaCes"
+PASSWORD = os.environ.get("PASSWORD") or "7154"
+bot = telebot.TeleBot(TOKEN)
 
 MARKETS = {
-    "🇪🇺/🇺🇸 EUR/USD": "EURUSD", "🇬🇧/🇺🇸 GBP/USD": "GBPUSD", "🇺🇸/🇯🇵 USD/JPY": "USDJPY",
-    "🇦🇺/🇺🇸 AUD/USD": "AUDUSD", "🇺🇸/🇨🇦 USD/CAD": "USDCAD", "🇪🇺/🇯🇵 EUR/JPY": "EURJPY",
-    "🇬🇧/🇯🇵 GBP/JPY": "GBPJPY", "🇺🇸/🇨🇭 USD/CHF": "USDCHF",
+    "🇪🇺/🇺🇸 EUR/USD": "EURUSD",
+    "🇬🇧/🇺🇸 GBP/USD": "GBPUSD",
+    "🇺🇸/🇯🇵 USD/JPY": "USDJPY",
+    "🇦🇺/🇺🇸 AUD/USD": "AUDUSD",
+    "🇺🇸/🇨🇦 USD/CAD": "USDCAD",
+    "🇪🇺/🇯🇵 EUR/JPY": "EURJPY",
+    "🇬🇧/🇯🇵 GBP/JPY": "GBPJPY",
+    "🇺🇸/🇨🇭 USD/CHF": "USDCHF",
+    "🇪🇺/🇬🇧 EUR/GBP": "EURGBP",
+    "🇦🇺/🇯🇵 AUD/JPY": "AUDJPY",
+    "🇪🇺/🇦🇺 EUR/AUD": "EURAUD",
+    "🇬🇧/🇦🇺 GBP/AUD": "GBPAUD",
+    "🇺🇸/🇿🇦 USD/ZAR": "USDZAR",
+    "🇪🇺/🇨🇦 EUR/CAD": "EURCAD",
+    "🇬🇧/🇨🇦 GBP/CAD": "GBPCAD",
+    "🇳🇿/🇺🇸 NZD/USD": "NZDUSD",
+    "🇪🇺/🇳🇿 EUR/NZD": "EURNZD",
 }
-# شلت لك OTC لانه وهمي
 
-user_data, authorized, cache = {}, set(), {}
+authorized = set()
 
-def get_rsi(symbol):
+def get_ta(symbol, interval):
     try:
-        # نحول EURUSD الى EURUSD=X عشان yfinance يفهمه
-        ticker = f"{symbol[:3]}{symbol[3:]}=X"
-        data = yf.download(ticker, period="1d", interval="15m", progress=False)
-        if len(data) < 14: return 50
-        delta = data['Close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-        rs = gain / loss
-        rsi = 100 - (100 / (1 + rs))
-        return float(rsi.iloc[-1])
+        handler = TA_Handler(symbol=f"{symbol}", exchange="FX", screener="forex", interval=interval)
+        analysis = handler.get_analysis()
+        rec = analysis.summary["RECOMMENDATION"]
+        buy = analysis.summary["BUY"]
+        sell = analysis.summary["SELL"]
+        rsi = analysis.indicators.get("RSI", 50)
+        total = buy + sell
+        perc = int((buy / total * 100)) if rec == "BUY" else int((sell / total * 100)) if rec == "SELL" else 50
+        return rec, perc, rsi
     except:
-        return 50 # لو فشل نرجع 50
-
-def get_tf_signal(symbol, interval):
-    key = f"{symbol}_{interval}"
-    now = time.time()
-    if key in cache and now - cache[key][2] < 60:
-        return cache[key][0], cache[key][1]
-    for _ in range(2):
-        try:
-            time.sleep(1.2)
-            h = TA_Handler(symbol=symbol, screener="forex", exchange="FX", interval=interval)
-            s = h.get_analysis().summary
-            buys, sells = s['BUY'], s['SELL']
-            if buys+sells == 0: continue
-            direction = "BUY" if buys > sells else "SELL"
-            percent = int((max(buys, sells) / (buys + sells)) * 100)
-            cache[key] = (direction, percent, now)
-            return direction, percent
-        except:
-            time.sleep(2)
-            continue
-    return "ERROR", 0
+        return "NEUTRAL", 50, 50
 
 def get_confluence_signal(symbol):
-    d5, p5 = get_tf_signal(symbol, Interval.INTERVAL_5_MINUTES)
-    d15, p15 = get_tf_signal(symbol, Interval.INTERVAL_15_MINUTES)
-    d1h, p1h = get_tf_signal(symbol, Interval.INTERVAL_1_HOUR)
-
-    if "ERROR" in [d5,d15,d1h]:
-        return "ERROR", 0, "⏳ TradingView مضغوط - انتظر دقيقة", "ERROR"
-
-    if not (d5 == d15 == d1h):
-        return "NO_TRADE", 0, f"H1:{p1h}% {d1h} | 15m:{p15}% {d15} | 5m:{p5}% {d5}\n❌ متضارب", "متضارب"
-
-    # فلتر RSI الجديد - هذا اللي يرفعه لـ 90
-    rsi = get_rsi(symbol)
-    if d5 == "BUY" and rsi > 70:
-        return "NO_TRADE", 0, f"❌ لا تدخل BUY - RSI متشبع {rsi:.1f}\nH1:{p1h}% | 15m:{p15}% | 5m:{p5}%", "متشبع"
-    if d5 == "SELL" and rsi < 30:
-        return "NO_TRADE", 0, f"❌ لا تدخل SELL - RSI متشبع {rsi:.1f}\nH1:{p1h}% | 15m:{p15}% | 5m:{p5}%", "متشبع"
-
-    avg = int((p5+p15+p1h)/3)
-    if p5 >= 80 and p15 >= 80 and p1h >= 80:
-        decision = f"🔥🔥 ذهبي قوي - RSI {rsi:.0f} ممتاز - ادخل 2%"
+    rec_h1, p_h1, rsi_h1 = get_ta(symbol, Interval.INTERVAL_1_HOUR)
+    rec_15, p_15, rsi_15 = get_ta(symbol, Interval.INTERVAL_15_MINUTES)
+    rec_5, p_5, rsi_5 = get_ta(symbol, Interval.INTERVAL_5_MINUTES)
+    rsi = rsi_5
+    if rec_h1 == rec_15 == rec_5 and rec_h1 in ["BUY", "SELL"]:
+        avg_p = int((p_h1 + p_15 + p_5) / 3)
+        if avg_p >= 75:
+            if 30 < rsi < 70:
+                decision = f"🔥🔥 ذهبي قوي - RSI {round(rsi,1)} ممتاز - ادخل 2%"
+            else:
+                decision = f"⚠️ قوي بس RSI {round(rsi,1)} متشبع - ادخل 1% فقط"
+        else:
+            decision = "متوسط"
+        det = f"H1:{p_h1}% {rec_h1} | 15m:{p_15}% {rec_15} | 5m:{p_5}% {rec_5}\nRSI: {round(rsi,1)}"
+        return rec_h1, avg_p, det, decision
     else:
-        decision = f"✅ جيد - RSI {rsi:.0f} - ادخل 1%"
-
-    return d5, min(92, avg+5), f"H1:{p1h}% | 15m:{p15}% | 5m:{p5}%\nRSI: {rsi:.1f}\n{decision}", decision
-
-# باقي الكود حقك نفسه (الازرار والفلاسك)
-def show_markets(chat_id):
-    markup = InlineKeyboardMarkup(row_width=2)
-    markup.add(InlineKeyboardButton("🔥 البحث عن الفرصة الذهبية", callback_data="golden"))
-    for name in MARKETS:
-        markup.add(InlineKeyboardButton(name, callback_data=f"market_{name}"))
-    bot.send_message(chat_id, "👋 بوت 90/100\nاختر:", reply_markup=markup)
+        det = f"H1:{p_h1}% {rec_h1} | 15m:{p_15}% {rec_15} | 5m:{p_5}% {rec_5}"
+        return "NEUTRAL", 0, det, "❌ غير متطابق"
 
 @bot.message_handler(commands=['start'])
-def start(msg):
-    if msg.from_user.id in authorized: show_markets(msg.chat.id)
-    else: bot.send_message(msg.chat.id, "🔒 أدخل الرقم السري:")
+def start(m):
+    if m.from_user.id in authorized:
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔥 البحث عن الفرصة الذهبية", callback_data="golden"))
+        markup.add(types.InlineKeyboardButton("📊 فحص سوق واحد", callback_data="single"))
+        bot.send_message(m.chat.id, "اهلا - اختر:", reply_markup=markup)
+    else:
+        bot.send_message(m.chat.id, "🔒 ارسل كلمة السر للدخول:")
 
-@bot.message_handler(func=lambda m: m.text and m.from_user.id not in authorized)
-def check_pass(msg):
-    if msg.text.strip() == PASSWORD:
-        authorized.add(msg.from_user.id)
-        bot.send_message(msg.chat.id, "✅ تم")
-        show_markets(msg.chat.id)
-    else: bot.send_message(msg.chat.id, "❌ خطأ")
+@bot.message_handler(func=lambda m: m.from_user.id not in authorized)
+def check_pass(m):
+    if m.text.strip() == PASSWORD:
+        authorized.add(m.from_user.id)
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔥 البحث عن الفرصة الذهبية", callback_data="golden"))
+        markup.add(types.InlineKeyboardButton("📊 فحص سوق واحد", callback_data="single"))
+        bot.send_message(m.chat.id, "✅ تم فتح البوت - حياك", reply_markup=markup)
+    else:
+        bot.send_message(m.chat.id, "❌ كلمة سر غلط")
+
+@bot.callback_query_handler(func=lambda c: c.data=="single")
+def single(call):
+    if call.from_user.id not in authorized: return
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    for name in MARKETS.keys():
+        markup.add(types.InlineKeyboardButton(name, callback_data=f"s_{MARKETS[name]}"))
+    bot.send_message(call.message.chat.id, "اختر السوق:", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("s_"))
+def check_single(call):
+    if call.from_user.id not in authorized: return
+    sym = call.data[2:]
+    bot.answer_callback_query(call.id, f"افحص {sym}...")
+    d, p, det, dec = get_confluence_signal(sym)
+    emoji = "🟢 BUY" if d=="BUY" else "🔴 SELL" if d=="SELL" else "⚪"
+    bot.send_message(call.message.chat.id, f"{emoji} {sym} - {p}%\n{det}\n{dec}")
 
 @bot.callback_query_handler(func=lambda c: c.data=="golden")
 def golden(call):
     if call.from_user.id not in authorized: return
-    bot.answer_callback_query(call.id, "⏳ افحص...")
-    loading = bot.send_message(call.message.chat.id, "⏳ افحص مع RSI...")
+    bot.answer_callback_query(call.id, "⏳ افحص 17 سوق...")
+    loading = bot.send_message(call.message.chat.id, f"⏳ افحص {len(MARKETS)} سوق (30 ثانية)...")
     goldens = []
+    start_t = time.time()
     for name, sym in MARKETS.items():
-        d, p, det, dec = get_confluence_signal(sym)
-        if "ذهبي" in dec:
-            emoji = "🟢 BUY" if d=="BUY" else "🔴 SELL"
-            goldens.append(f"{emoji} {name} - {p}%\n{det}\n")
-        time.sleep(1.5)
+        try:
+            d, p, det, dec = get_confluence_signal(sym)
+            if "ذهبي" in dec:
+                emoji = "🟢 BUY" if d=="BUY" else "🔴 SELL"
+                goldens.append(f"{emoji} {name} - {p}%\n{det}\n{dec}\n")
+        except: continue
+    elapsed = round(time.time() - start_t, 1)
     if not goldens:
-        bot.edit_message_text("❌ لا يوجد ذهبي نظيف (RSI فلتر شغال)", call.message.chat.id, loading.message_id)
+        bot.edit_message_text(f"❌ فحصت {len(MARKETS)} سوق في {elapsed}ث - لا يوجد ذهبي نظيف\nجرب بعد 5 دقايق", call.message.chat.id, loading.message_id)
     else:
-        bot.edit_message_text("🔥🔥 الفرص الذهبية 90/100 🔥🔥\n\n" + "\n".join(goldens), call.message.chat.id, loading.message_id)
-
-@bot.callback_query_handler(func=lambda c: c.data.startswith("market_"))
-def choose_market(call):
-    if call.from_user.id not in authorized: return
-    name = call.data.replace("market_", "")
-    user_data[call.from_user.id] = MARKETS[name], name
-    markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("🔍 فحص شامل + RSI", callback_data="time_ALL"))
-    bot.send_message(call.message.chat.id, f"اخترت {name}", reply_markup=markup)
-
-@bot.callback_query_handler(func=lambda c: c.data.startswith("time_"))
-def choose_time(call):
-    if call.from_user.id not in authorized: return
-    symbol, name = user_data.get(call.from_user.id, (None, None))
-    loading = bot.send_message(call.message.chat.id, f"⏳ فحص {name} مع RSI...")
-    d, p, details, dec = get_confluence_signal(symbol)
-    bot.edit_message_text(f"📊 {name}\n{details}", call.message.chat.id, loading.message_id)
+        text = f"🔥🔥 {len(goldens)} فرص من {len(MARKETS)} سوق في {elapsed}ث 🔥🔥\n\n" + "\n".join(goldens)
+        bot.edit_message_text(text, call.message.chat.id, loading.message_id)
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Bot 90 Live"
+def home(): return "Bot Running"
 def run_flask():
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
 threading.Thread(target=run_flask, daemon=True).start()
-bot.remove_webhook()
-time.sleep(1)
-bot.infinity_polling(skip_pending=True)
+bot.infinity_polling(timeout=60, long_polling_timeout=60)
