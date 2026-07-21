@@ -1,7 +1,3 @@
 pyTelegramBotAPI
-Flask
 tradingview-ta
-requests
-websocket-client
-pyaes
-quotexapi
+flask
