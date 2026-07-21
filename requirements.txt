@@ -1,4 +1,6 @@
+telebot
 pyTelegramBotAPI
-Flask
 tradingview-ta
-requests
+Flask
+yfinance
+pandas
