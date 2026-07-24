@@ -24,6 +24,7 @@ MARKETS = {
 user_data = {}
 last_request = {}
 authorized = set()
+user_locks = {}
 
 def get_tf_signal(symbol, interval):
     try:
@@ -41,8 +42,7 @@ def get_confluence_signal(symbol):
     d5, p5 = get_tf_signal(symbol, Interval.INTERVAL_5_MINUTES)
     d15, p15 = get_tf_signal(symbol, Interval.INTERVAL_15_MINUTES)
     d1h, p1h = get_tf_signal(symbol, Interval.INTERVAL_1_HOUR)
-
-    if d5 == d15 == d1h and d5!= "ERROR":
+    if d5 == d15 == d1h and d5 not in ["ERROR","NEUTRAL"]:
         if p5 >= 80 and p15 >= 80 and p1h >= 80:
             decision = "🔥🔥 دخول قوي ذهبي - ادخل 2% 🔥🔥"
         elif p5 >= 75 and p15 >= 75 and p1h >= 70:
@@ -53,9 +53,8 @@ def get_confluence_signal(symbol):
             decision = "❌ لا تدخل - ثقة ضعيفة"
         avg = int((p5+p15+p1h)/3)
         final = min(94, avg+5)
-        return d5, final, f"H1:{p1h}% | 15m:{p15}% | 5m:{p5}%\n{decision}"
-
-    return "NO_TRADE", 0, f"H1:{p1h}% {d1h} | 15m:{p15}% {d15} | 5m:{p5}% {d5}\n\n❌ لا تدخل - السوق متضارب"
+        return d5, final, f"H1:{p1h}% | 15m:{p15}% | 5m:{p5}%\n{decision}", (d5,p5,d15,p15,d1h,p1h)
+    return "NO_TRADE", 0, f"H1:{p1h}% {d1h} | 15m:{p15}% {d15} | 5m:{p5}% {d5}\n\n❌ لا تدخل - السوق متضارب", (d5,p5,d15,p15,d1h,p1h)
 
 def main_menu(chat_id):
     markup = InlineKeyboardMarkup(row_width=1)
@@ -93,21 +92,71 @@ def golden(call):
     if call.from_user.id not in authorized: return
     bot.answer_callback_query(call.id, "⏳ افحص 22 سوق...")
     loading = bot.send_message(call.message.chat.id, f"⏳ افحص {len(MARKETS)} سوق (25 ثانية)...")
-    goldens = []
+    clean = []
+    reversal = []
+    weak = []
+    volatile = []
+    locked_list = []
+    now = time.time()
+    uid = call.from_user.id
+    if uid not in user_locks: user_locks[uid] = {}
     start_t = time.time()
     for name, sym in MARKETS.items():
+        if sym in user_locks[uid]:
+            expiry = user_locks[uid][sym]
+            if now < expiry:
+                remain = int((expiry - now) / 60) + 1
+                locked_list.append(f"🔒 {name} - باقي {remain} دقيقة")
+                continue
+            else:
+                del user_locks[uid][sym]
         try:
-            d, p, details = get_confluence_signal(sym)
-            if d!= "NO_TRADE" and p >= 80:
-                emoji = "🟢 BUY" if d=="BUY" else "🔴 SELL"
-                goldens.append(f"{emoji} {name} - {p}%\n{details}\n")
+            d, p, details, tfs = get_confluence_signal(sym)
+            d5,p5,d15,p15,d1h,p1h = tfs
+            if d == "NO_TRADE":
+                if (d1h!= d5 or d1h!= d15 or d15!= d5) and "ERROR" not in [d1h,d15,d5] and "NEUTRAL" not in [d1h,d15,d5]:
+                    reversal.append(f"⚠️ {name} - H1:{p1h}% {d1h} | 15m:{p15}% {d15} | 5m:{p5}% {d5}")
+                else:
+                    volatile.append(name)
+            else:
+                avg = int((p5+p15+p1h)/3)
+                if avg >= 86 and min(p5,p15,p1h) >= 80:
+                    emoji = "🟢 BUY" if d=="BUY" else "🔴 SELL"
+                    clean.append((f"{emoji} {name} - {avg}%\nH1:{p1h}% | 15m:{p15}% | 5m:{p5}%", sym, name))
+                else:
+                    weak.append(f"{name} {avg}%")
         except: continue
     elapsed = round(time.time() - start_t, 1)
-    if not goldens:
-        bot.edit_message_text(f"❌ فحصت {len(MARKETS)} سوق في {elapsed}ث - لا يوجد ذهبي نظيف\nجرب بعد 5 دقايق", call.message.chat.id, loading.message_id)
+    text = f"🔥 فحصت {len(MARKETS)} سوق ثقة 86%+ في {elapsed}ث 🔥\n\n"
+    if clean:
+        text += f"✅ نظيفة - ادخل وانت مرتاح ({len(clean)}):\n\n"
+        for c_text, sym, name in clean:
+            text += c_text + "\n\n"
     else:
-        text = f"🔥🔥 {len(goldens)} فرص من {len(MARKETS)} سوق في {elapsed}ث 🔥🔥\n\n" + "\n".join(goldens)
-        bot.edit_message_text(text, call.message.chat.id, loading.message_id)
+        text += "✅ نظيفة - لا يوجد حاليا\n\n"
+    if reversal:
+        text += f"⚠️ انعكاس - لا تدخل عكس الترند ({len(reversal)}):\n" + "\n".join(reversal) + "\n\n"
+    if locked_list:
+        text += f"🔒 مقفلة - لا تدخل ورا بعض ({len(locked_list)}):\n" + "\n".join(locked_list) + "\n\n"
+    if weak:
+        text += f"💤 ضعيفة ({len(weak)}):\n" + ", ".join(weak[:10]) + "\n\n"
+    if volatile:
+        text += f"〰️ متذبذب ({len(volatile)}):\n" + ", ".join(volatile)
+    markup = InlineKeyboardMarkup(row_width=1)
+    for c_text, sym, name in clean:
+        markup.add(InlineKeyboardButton(f"✅ دخلت {sym}", callback_data=f"enter_{sym}"))
+    markup.add(InlineKeyboardButton("🔄 تحديث جديد", callback_data="golden"))
+    bot.edit_message_text(text, call.message.chat.id, loading.message_id, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("enter_"))
+def lock_market(call):
+    if call.from_user.id not in authorized: return
+    sym = call.data.replace("enter_", "")
+    uid = call.from_user.id
+    if uid not in user_locks: user_locks[uid] = {}
+    user_locks[uid][sym] = time.time() + (30*60)
+    bot.answer_callback_query(call.id, f"🔒 قفلت {sym} لمدة 30 دقيقة")
+    bot.send_message(call.message.chat.id, f"🔒 تمام قفلت {sym} لمدة 30 دقيقة - ما راح اطلعه لك في النظيفة الين ينتهي الوقت.")
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("market_"))
 def choose_market(call):
@@ -135,7 +184,7 @@ def choose_time(call):
     if not symbol: return
     loading = bot.send_message(call.message.chat.id, f"⏳ جاري فحص {name}...")
     if mode == "ALL":
-        direction, percent, details = get_confluence_signal(symbol)
+        direction, percent, details, _ = get_confluence_signal(symbol)
         if direction == "NO_TRADE":
             bot.edit_message_text(f"📊 {name}\n{details}", call.message.chat.id, loading.message_id)
             return
