@@ -31,7 +31,7 @@ def get_tf_signal(symbol, interval):
         h = TA_Handler(symbol=symbol, screener="forex", exchange="FX", interval=interval)
         analysis = h.get_analysis()
         s = analysis.summary
-        rsi = analysis.indicators.get("RSI", 50) # <- اضافة التشبع فقط
+        rsi = analysis.indicators.get("RSI", 50)
         buys, sells = s['BUY'], s['SELL']
         if buys+sells == 0: return "NEUTRAL", 50, rsi
         direction = "BUY" if buys > sells else "SELL"
@@ -99,7 +99,7 @@ def golden(call):
     weak = []
     volatile = []
     locked_list = []
-    saturated = [] # <- اضافة قائمة التشبع فقط
+    saturated = []
     now = time.time()
     uid = call.from_user.id
     if uid not in user_locks: user_locks[uid] = {}
@@ -123,31 +123,40 @@ def golden(call):
                     volatile.append(name)
             else:
                 avg = int((p5+p15+p1h)/3)
-                avg_rsi = (rsi5+rsi15+rsi1h)/3 # <- حساب التشبع
-                # --- فلتر التشبع اللي طلبته ---
+                avg_rsi = (rsi5+rsi15+rsi1h)/3
+                min_rsi = min(rsi5,rsi15,rsi1h)
                 if d == "BUY" and avg_rsi >= 70:
-                    saturated.append(f"🔥 {name} BUY {avg}% بس متشبع شراء RSI {int(avg_rsi)} - لا تدخل راحت عليك")
+                    saturated.append(f"🔥 {name} BUY {avg}% RSI {int(avg_rsi)} - متشبع")
                     continue
                 if d == "SELL" and avg_rsi <= 30:
-                    saturated.append(f"🔥 {name} SELL {avg}% بس متشبع بيع RSI {int(avg_rsi)} - لا تدخل راحت عليك")
+                    saturated.append(f"🔥 {name} SELL {avg}% RSI {int(avg_rsi)} - متشبع")
                     continue
-                # --- نهاية فلتر التشبع ---
+                if min_rsi <= 25 or min_rsi >= 75:
+                    saturated.append(f"🔥 {name} {d} {avg}% بس 5m متشبع RSI {int(min_rsi)}")
+                    continue
                 if avg >= 86 and min(p5,p15,p1h) >= 80:
                     emoji = "🟢 BUY" if d=="BUY" else "🔴 SELL"
-                    clean.append((f"{emoji} {name} - {avg}%\nH1:{p1h}% RSI:{int(rsi1h)} | 15m:{p15}% RSI:{int(rsi15)} | 5m:{p5}% RSI:{int(rsi5)}", sym, name))
+                    clean_score = avg - abs(50 - avg_rsi) * 0.2
+                    clean.append((f"{emoji} {name} - {avg}%\nH1:{p1h}% RSI:{int(rsi1h)} | 15m:{p15}% RSI:{int(rsi15)} | 5m:{p5}% RSI:{int(rsi5)}", sym, name, clean_score, avg))
                 else:
                     weak.append(f"{name} {avg}%")
         except: continue
+    clean_sorted = sorted(clean, key=lambda x: x[3], reverse=True)
+    best_2 = clean_sorted[:2]
+    rest_clean = clean_sorted[2:]
     elapsed = round(time.time() - start_t, 1)
     text = f"🔥 فحصت {len(MARKETS)} سوق ثقة 86%+ في {elapsed}ث 🔥\n\n"
-    if clean:
-        text += f"✅ نظيفة - ادخل وانت مرتاح ({len(clean)}):\n\n"
-        for c_text, sym, name in clean:
-            text += c_text + "\n\n"
+    if best_2:
+        text += f"✅ افضل فرصتين - ادخل هذولي فقط ({len(clean_sorted)} نظيفة total):\n\n"
+        for i, (c_text, sym, name, score, avg) in enumerate(best_2, 1):
+            medal = "🥇" if i==1 else "🥈"
+            text += f"{medal} {c_text}\n\n"
+        if rest_clean:
+            text += f"📋 باقي الفرص النظيفة ({len(rest_clean)}):\n" + ", ".join([f"{x[2]} {x[4]}%" for x in rest_clean]) + "\n\n"
     else:
         text += "✅ نظيفة - لا يوجد حاليا\n\n"
     if saturated:
-        text += f"🔥 متشبعة - لا تدخل راحت عليك ({len(saturated)}):\n" + "\n".join(saturated) + "\n\n"
+        text += f"🔥 متشبعة ({len(saturated)}):\n" + "\n".join(saturated) + "\n\n"
     if reversal:
         text += f"⚠️ انعكاس - لا تدخل عكس الترند ({len(reversal)}):\n" + "\n".join(reversal) + "\n\n"
     if locked_list:
@@ -157,7 +166,7 @@ def golden(call):
     if volatile:
         text += f"〰️ متذبذب ({len(volatile)}):\n" + ", ".join(volatile)
     markup = InlineKeyboardMarkup(row_width=1)
-    for c_text, sym, name in clean:
+    for c_text, sym, name, score, avg in best_2:
         markup.add(InlineKeyboardButton(f"✅ دخلت {sym}", callback_data=f"enter_{sym}"))
     markup.add(InlineKeyboardButton("🔄 تحديث جديد", callback_data="golden"))
     bot.edit_message_text(text, call.message.chat.id, loading.message_id, reply_markup=markup)
