@@ -29,19 +29,21 @@ user_locks = {}
 def get_tf_signal(symbol, interval):
     try:
         h = TA_Handler(symbol=symbol, screener="forex", exchange="FX", interval=interval)
-        s = h.get_analysis().summary
+        analysis = h.get_analysis()
+        s = analysis.summary
+        rsi = analysis.indicators.get("RSI", 50) # <- اضافة التشبع فقط
         buys, sells = s['BUY'], s['SELL']
-        if buys+sells == 0: return "NEUTRAL", 50
+        if buys+sells == 0: return "NEUTRAL", 50, rsi
         direction = "BUY" if buys > sells else "SELL"
         percent = int((max(buys, sells) / (buys + sells)) * 100)
-        return direction, percent
+        return direction, percent, rsi
     except:
-        return "ERROR", 0
+        return "ERROR", 0, 50
 
 def get_confluence_signal(symbol):
-    d5, p5 = get_tf_signal(symbol, Interval.INTERVAL_5_MINUTES)
-    d15, p15 = get_tf_signal(symbol, Interval.INTERVAL_15_MINUTES)
-    d1h, p1h = get_tf_signal(symbol, Interval.INTERVAL_1_HOUR)
+    d5, p5, rsi5 = get_tf_signal(symbol, Interval.INTERVAL_5_MINUTES)
+    d15, p15, rsi15 = get_tf_signal(symbol, Interval.INTERVAL_15_MINUTES)
+    d1h, p1h, rsi1h = get_tf_signal(symbol, Interval.INTERVAL_1_HOUR)
     if d5 == d15 == d1h and d5 not in ["ERROR","NEUTRAL"]:
         if p5 >= 80 and p15 >= 80 and p1h >= 80:
             decision = "🔥🔥 دخول قوي ذهبي - ادخل 2% 🔥🔥"
@@ -53,8 +55,8 @@ def get_confluence_signal(symbol):
             decision = "❌ لا تدخل - ثقة ضعيفة"
         avg = int((p5+p15+p1h)/3)
         final = min(94, avg+5)
-        return d5, final, f"H1:{p1h}% | 15m:{p15}% | 5m:{p5}%\n{decision}", (d5,p5,d15,p15,d1h,p1h)
-    return "NO_TRADE", 0, f"H1:{p1h}% {d1h} | 15m:{p15}% {d15} | 5m:{p5}% {d5}\n\n❌ لا تدخل - السوق متضارب", (d5,p5,d15,p15,d1h,p1h)
+        return d5, final, f"H1:{p1h}% RSI:{int(rsi1h)} | 15m:{p15}% RSI:{int(rsi15)} | 5m:{p5}% RSI:{int(rsi5)}\n{decision}", (d5,p5,rsi5,d15,p15,rsi15,d1h,p1h,rsi1h)
+    return "NO_TRADE", 0, f"H1:{p1h}% {d1h} RSI:{int(rsi1h)} | 15m:{p15}% {d15} RSI:{int(rsi15)} | 5m:{p5}% {d5} RSI:{int(rsi5)}\n\n❌ لا تدخل - السوق متضارب", (d5,p5,rsi5,d15,p15,rsi15,d1h,p1h,rsi1h)
 
 def main_menu(chat_id):
     markup = InlineKeyboardMarkup(row_width=1)
@@ -97,6 +99,7 @@ def golden(call):
     weak = []
     volatile = []
     locked_list = []
+    saturated = [] # <- اضافة قائمة التشبع فقط
     now = time.time()
     uid = call.from_user.id
     if uid not in user_locks: user_locks[uid] = {}
@@ -112,7 +115,7 @@ def golden(call):
                 del user_locks[uid][sym]
         try:
             d, p, details, tfs = get_confluence_signal(sym)
-            d5,p5,d15,p15,d1h,p1h = tfs
+            d5,p5,rsi5,d15,p15,rsi15,d1h,p1h,rsi1h = tfs
             if d == "NO_TRADE":
                 if (d1h!= d5 or d1h!= d15 or d15!= d5) and "ERROR" not in [d1h,d15,d5] and "NEUTRAL" not in [d1h,d15,d5]:
                     reversal.append(f"⚠️ {name} - H1:{p1h}% {d1h} | 15m:{p15}% {d15} | 5m:{p5}% {d5}")
@@ -120,9 +123,18 @@ def golden(call):
                     volatile.append(name)
             else:
                 avg = int((p5+p15+p1h)/3)
+                avg_rsi = (rsi5+rsi15+rsi1h)/3 # <- حساب التشبع
+                # --- فلتر التشبع اللي طلبته ---
+                if d == "BUY" and avg_rsi >= 70:
+                    saturated.append(f"🔥 {name} BUY {avg}% بس متشبع شراء RSI {int(avg_rsi)} - لا تدخل راحت عليك")
+                    continue
+                if d == "SELL" and avg_rsi <= 30:
+                    saturated.append(f"🔥 {name} SELL {avg}% بس متشبع بيع RSI {int(avg_rsi)} - لا تدخل راحت عليك")
+                    continue
+                # --- نهاية فلتر التشبع ---
                 if avg >= 86 and min(p5,p15,p1h) >= 80:
                     emoji = "🟢 BUY" if d=="BUY" else "🔴 SELL"
-                    clean.append((f"{emoji} {name} - {avg}%\nH1:{p1h}% | 15m:{p15}% | 5m:{p5}%", sym, name))
+                    clean.append((f"{emoji} {name} - {avg}%\nH1:{p1h}% RSI:{int(rsi1h)} | 15m:{p15}% RSI:{int(rsi15)} | 5m:{p5}% RSI:{int(rsi5)}", sym, name))
                 else:
                     weak.append(f"{name} {avg}%")
         except: continue
@@ -134,6 +146,8 @@ def golden(call):
             text += c_text + "\n\n"
     else:
         text += "✅ نظيفة - لا يوجد حاليا\n\n"
+    if saturated:
+        text += f"🔥 متشبعة - لا تدخل راحت عليك ({len(saturated)}):\n" + "\n".join(saturated) + "\n\n"
     if reversal:
         text += f"⚠️ انعكاس - لا تدخل عكس الترند ({len(reversal)}):\n" + "\n".join(reversal) + "\n\n"
     if locked_list:
@@ -192,8 +206,8 @@ def choose_time(call):
         bot.edit_message_text(f"📊 {name}\n{emoji}\n💪 ثقة: {percent}%\n\n{details}", call.message.chat.id, loading.message_id)
     else:
         tf_map = {"5": Interval.INTERVAL_5_MINUTES, "15": Interval.INTERVAL_15_MINUTES}
-        d, p = get_tf_signal(symbol, tf_map[mode])
-        bot.edit_message_text(f"📊 {name} {mode}m\n{'🟢 BUY' if d=='BUY' else '🔴 SELL'}\n💪 {p}%\n\n{'✅ ادخل' if p>=80 else '❌ لا تدخل'}", call.message.chat.id, loading.message_id)
+        d, p, rsi = get_tf_signal(symbol, tf_map[mode])
+        bot.edit_message_text(f"📊 {name} {mode}m\n{'🟢 BUY' if d=='BUY' else '🔴 SELL'}\n💪 {p}% RSI:{int(rsi)}\n\n{'✅ ادخل' if p>=80 and 30 < rsi < 70 else '❌ لا تدخل متشبع' if rsi>=70 or rsi<=30 else '❌ لا تدخل'}", call.message.chat.id, loading.message_id)
 
 app = Flask(__name__)
 @app.route('/')
