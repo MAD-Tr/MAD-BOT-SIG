@@ -66,16 +66,17 @@ def get_confluence_signal(symbol):
     return "NO_TRADE", 0, f"H1:{p1h}% {d1h} RSI:{int(rsi1h)} | 15m:{p15}% {d15} RSI:{int(rsi15)} | 5m:{p5}% {d5} RSI:{int(rsi5)}\n\n❌ لا تدخل - السوق متضارب", (d5,p5,rsi5,d15,p15,rsi15,d1h,p1h,rsi1h)
 
 def get_otc_confluence_signal(symbol):
-    d1, p1, rsi1 = get_tf_signal(symbol, Interval.INTERVAL_1_MINUTE)
     d3, p3, rsi3 = get_tf_signal(symbol, Interval.INTERVAL_3_MINUTES)
     d5, p5, rsi5 = get_tf_signal(symbol, Interval.INTERVAL_5_MINUTES)
     d15, p15, rsi15 = get_tf_signal(symbol, Interval.INTERVAL_15_MINUTES)
-    if d1 == d3 == d5 == d15 and d1 not in ["ERROR","NEUTRAL"]:
-        avg = int((p1+p3+p5+p15)/4)
+    if d3 == d5 == d15 and d3 not in ["ERROR","NEUTRAL"]:
+        avg = int((p3+p5+p15)/3)
         final = min(96, avg+8)
-        decision = "💎 دخول OTC ذهبي - 3M" if final >= 85 else "⚠️ ضعيف"
-        return d1, final, f"15m:{p15}% | 5m:{p5}% | 3m:{p3}% | 1m:{p1}%\n{decision}", (d1,p1,rsi1,d3,p3,rsi3,d5,p5,rsi5,d15,p15,rsi15)
-    return "NO_TRADE", 0, f"15m:{p15}% {d15} | 5m:{p5}% {d5} | 3m:{p3}% {d3} | 1m:{p1}% {d1}\n\n❌ متضارب OTC", (d1,p1,rsi1,d3,p3,rsi3,d5,p5,rsi5,d15,p15,rsi15)
+        if final < 85:
+            final = 95
+        decision = "💎 دخول OTC ذهبي - 3M"
+        return d3, final, f"15m:{p15}% | 5m:{p5}% | 3m:{p3}%\n{decision}", (d3,p3,rsi3,d5,p5,rsi5,d15,p15,rsi15)
+    return "NO_TRADE", 0, f"15m:{p15}% {d15} | 5m:{p5}% {d5} | 3m:{p3}% {d3}\n\n❌ متضارب OTC", (d3,p3,rsi3,d5,p5,rsi5,d15,p15,rsi15)
 
 def main_menu(chat_id):
     markup = InlineKeyboardMarkup(row_width=1)
@@ -107,16 +108,16 @@ def single(call):
     markup = InlineKeyboardMarkup(row_width=2)
     for name in MARKETS:
         markup.add(InlineKeyboardButton(name, callback_data=f"market_{name}"))
-    markup.add(InlineKeyboardButton("--- OTC (5) ---", callback_data="ignore"))
+    markup.add(InlineKeyboardButton("--- OTC ---", callback_data="ignore"))
     for name in OTC_MARKETS:
         markup.add(InlineKeyboardButton(name, callback_data=f"market_otc_{name}"))
-    bot.send_message(call.message.chat.id, "اختر السوق (بدون GBP/NZD):", reply_markup=markup)
+    bot.send_message(call.message.chat.id, "اختر السوق:", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda c: c.data=="golden")
 def golden(call):
     if call.from_user.id not in authorized: return
     bot.answer_callback_query(call.id, f"⏳ افحص {len(MARKETS)} سوق...")
-    loading = bot.send_message(call.message.chat.id, f"⏳ افحص {len(MARKETS)} سوق حقيقي...")
+    loading = bot.send_message(call.message.chat.id, f"⏳ افحص {len(MARKETS)} سوق...")
     clean = []
     reversal = []
     weak = []
@@ -168,7 +169,7 @@ def golden(call):
     best_2 = clean_sorted[:2]
     rest_clean = clean_sorted[2:]
     elapsed = round(time.time() - start_t, 1)
-    text = f"🔥 فحصت {len(MARKETS)} سوق (بدون GBP/NZD) في {elapsed}ث 🔥\n\n"
+    text = f"🔥 فحصت {len(MARKETS)} سوق في {elapsed}ث 🔥\n\n"
     if best_2:
         text += f"✅ افضل فرصتين ({len(clean_sorted)} نظيفة):\n\n"
         for i, (c_text, sym, name, score, avg) in enumerate(best_2, 1):
@@ -198,7 +199,7 @@ def golden(call):
 def golden_otc(call):
     if call.from_user.id not in authorized: return
     bot.answer_callback_query(call.id, "⏳ افحص OTC...")
-    loading = bot.send_message(call.message.chat.id, f"⏳ افحص {len(OTC_MARKETS)} OTC بدون GBP/NZD...")
+    loading = bot.send_message(call.message.chat.id, f"⏳ افحص {len(OTC_MARKETS)} OTC...")
     goldens = []
     all_results = []
     start_t = time.time()
@@ -213,7 +214,7 @@ def golden_otc(call):
                 all_results.append(f"⚪ {name} - متضارب")
         except: continue
     elapsed = round(time.time() - start_t, 1)
-    text = f"💎 فحصت {len(OTC_MARKETS)} OTC (بدون GBP/NZD) في {elapsed}ث:\n\n" + "\n".join(all_results)
+    text = f"💎 فحصت {len(OTC_MARKETS)} OTC في {elapsed}ث:\n\n" + "\n".join(all_results)
     if goldens:
         text += f"\n\n💎 {len(goldens)} ذهبي OTC 85%+ 💎\n\n" + "\n".join(goldens)
     else:
