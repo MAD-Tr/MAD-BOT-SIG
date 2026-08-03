@@ -1,8 +1,7 @@
-import os, time, threading, random
+import os, time, threading
 from flask import Flask
 import telebot
-from telebot.types import InlineKeyboardMarkup, InlineButton
-from telebot.types import InlineKeyboardButton
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from tradingview_ta import TA_Handler, Interval
 
 TOKEN = os.environ.get("TOKEN") or "8828337019:AAHgUTyjrxMk7IkJpMZzseKbroltKInaCes"
@@ -22,7 +21,6 @@ MARKETS = {
 authorized=set()
 
 def get_tf_fixed(symbol, interval):
-    # يجرب 3 منصات
     for exchange in ["FX", "FX_IDC", "OANDA"]:
         try:
             h = TA_Handler(symbol=symbol, screener="forex", exchange=exchange, interval=interval)
@@ -47,7 +45,7 @@ def get_signal(symbol):
     d1h,p1h,rsi1h = get_tf_fixed(symbol, Interval.INTERVAL_1_HOUR)
 
     if "ERROR" in [d5,d15,d1h]:
-        return "NO_TRADE",0,f"⚠️ TradingView معلق جرب بعد دقيقة\nH1:{d1h} 15m:{d15} 5m:{d5}"
+        return "NO_TRADE",0,f"⚠️ TradingView معلق جرب بعد دقيقة"
 
     if d5==d15==d1h:
         avg=int((p5+p15+p1h)/3)
@@ -63,7 +61,7 @@ def main_menu(chat_id):
     m=InlineKeyboardMarkup(row_width=1)
     m.add(InlineKeyboardButton("🔥 فحص شامل 85%+ (14 سوق)", callback_data="golden"))
     m.add(InlineKeyboardButton("📊 فحص سوق واحد", callback_data="single"))
-    bot.send_message(chat_id,"🏆 البوت الاسطوري V3 - مصلح ضد ERROR",reply_markup=m)
+    bot.send_message(chat_id,"🏆 البوت الاسطوري V3",reply_markup=m)
 
 @bot.message_handler(commands=['start'])
 def start(msg):
@@ -83,7 +81,7 @@ def calls(call):
     if call.from_user.id not in authorized: return
     if call.data=="golden":
         bot.answer_callback_query(call.id,"⏳ افحص...")
-        load=bot.send_message(call.message.chat.id,"⏳ افحص 14 سوق (30 ثانية عشان ما يعلق)...")
+        load=bot.send_message(call.message.chat.id,"⏳ افحص 14 سوق (30 ثانية)...")
         ok=[]
         for name,sym in MARKETS.items():
             try:
@@ -91,7 +89,7 @@ def calls(call):
                 if d!="NO_TRADE" and p>=85:
                     emoji="🟢 BUY" if d=="BUY" else "🔴 SELL"
                     ok.append(f"{emoji} {name} - {p}%\n{det}")
-                time.sleep(1) # مهم عشان ما يبلعك TradingView
+                time.sleep(1)
             except: continue
         txt="\n\n".join(ok) if ok else "❌ لا يوجد 85%+ حاليا"
         m=InlineKeyboardMarkup(row_width=1); m.add(InlineKeyboardButton("🔄 تحديث",callback_data="golden"))
