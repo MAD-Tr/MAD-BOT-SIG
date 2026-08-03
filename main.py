@@ -32,6 +32,9 @@ user_data = {}
 last_request = {}
 authorized = set()
 user_locks = {}
+# === ميزة التنبيه الجديدة ===
+alert_enabled = set() # اللي مشغل التنبيه
+alert_chat_ids = {} # user_id -> chat_id
 
 def get_tf_signal(symbol, interval):
     try:
@@ -83,19 +86,64 @@ def main_menu(chat_id):
     markup.add(InlineKeyboardButton("🔥 ذهبي حقيقي (14 سوق - 86%)", callback_data="golden"))
     markup.add(InlineKeyboardButton("💎 ذهبي OTC (5 اسواق - 85%)", callback_data="golden_otc"))
     markup.add(InlineKeyboardButton("📊 فحص سوق واحد", callback_data="single"))
+    # زر التنبيه الجديد
+    is_on = chat_id in alert_chat_ids.values() and any(uid for uid, cid in alert_chat_ids.items() if cid == chat_id and uid in alert_enabled)
+    # تبسيط: نفحص اذا فيه يوزر مشغل
+    has_alert = len(alert_enabled) > 0
+    if has_alert:
+        markup.add(InlineKeyboardButton("🔕 ايقاف التنبيه التلقائي", callback_data="alert_off"))
+    else:
+        markup.add(InlineKeyboardButton("🔔 تشغيل التنبيه كل 5 دقايق (كل الاسواق)", callback_data="alert_on"))
     bot.send_message(chat_id, "👋 البوت الاسطوري", reply_markup=markup)
+
+# === حلقة التنبيه التلقائي ===
+def auto_alert_loop():
+    while True:
+        time.sleep(300) # كل 5 دقايق
+        if not alert_enabled:
+            continue
+        try:
+            print("🔔 فحص تلقائي...")
+            found = []
+            # فحص الحقيقي
+            for name, sym in MARKETS.items():
+                d, p, details, tfs = get_confluence_signal(sym)
+                if d!= "NO_TRADE" and p >= 86:
+                    d5,p5,rsi5,d15,p15,rsi15,d1h,p1h,rsi1h = tfs
+                    avg_rsi = (rsi5+rsi15+rsi1h)/3
+                    if not (d=="BUY" and avg_rsi>=70) and not (d=="SELL" and avg_rsi<=30):
+                        found.append(f"🔥 {name} {d} {p}% | H1:{p1h}% 15m:{p15}% 5m:{p5}%")
+            # فحص OTC
+            for name, sym in OTC_MARKETS.items():
+                d, p, details, tfs = get_otc_confluence_signal(sym)
+                if d!= "NO_TRADE" and p >= 85:
+                    found.append(f"💎 {name} {d} {p}%")
+
+            if found:
+                text = f"🔔 تنبيه تلقائي - فرص ذهبية ({len(found)}):\n\n" + "\n".join(found)
+                for uid in list(alert_enabled):
+                    try:
+                        cid = alert_chat_ids.get(uid)
+                        if cid:
+                            bot.send_message(cid, text)
+                    except Exception as e:
+                        print(f"alert send error {e}")
+        except Exception as e:
+            print(f"auto alert error {e}")
 
 @bot.message_handler(commands=['start'])
 def start(msg):
     if msg.from_user.id not in authorized:
         bot.send_message(msg.chat.id, "🔒 ارسل كلمة السر:")
         return
+    alert_chat_ids[msg.from_user.id] = msg.chat.id
     main_menu(msg.chat.id)
 
 @bot.message_handler(func=lambda m: m.from_user.id not in authorized)
 def check_pass(m):
     if m.text.strip() == PASSWORD:
         authorized.add(m.from_user.id)
+        alert_chat_ids[m.from_user.id] = m.chat.id
         bot.send_message(m.chat.id, "✅ تم فتح البوت")
         main_menu(m.chat.id)
     else:
@@ -112,6 +160,20 @@ def single(call):
     for name in OTC_MARKETS:
         markup.add(InlineKeyboardButton(name, callback_data=f"market_otc_{name}"))
     bot.send_message(call.message.chat.id, "اختر السوق:", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda c: c.data in ["alert_on","alert_off"])
+def toggle_alert(call):
+    if call.from_user.id not in authorized: return
+    if call.data == "alert_on":
+        alert_enabled.add(call.from_user.id)
+        alert_chat_ids[call.from_user.id] = call.message.chat.id
+        bot.answer_callback_query(call.id, "🔔 تم تشغيل التنبيه كل 5 دقايق")
+        bot.send_message(call.message.chat.id, "🔔 تم تشغيل التنبيه\n\nبفحص كل 14 سوق حقيقي + 5 OTC كل 5 دقايق وارسلك بس الذهبي 86%+ تلقائيا")
+    else:
+        alert_enabled.discard(call.from_user.id)
+        bot.answer_callback_query(call.id, "🔕 تم ايقاف التنبيه")
+        bot.send_message(call.message.chat.id, "🔕 تم ايقاف التنبيه التلقائي")
+    main_menu(call.message.chat.id)
 
 @bot.callback_query_handler(func=lambda c: c.data=="golden")
 def golden(call):
@@ -285,6 +347,8 @@ def run_flask():
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
 
 threading.Thread(target=run_flask, daemon=True).start()
+threading.Thread(target=auto_alert_loop, daemon=True).start() # تشغيل التنبيه
+
 bot.remove_webhook()
 time.sleep(2)
 while True:
