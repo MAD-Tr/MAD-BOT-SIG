@@ -1,0 +1,23 @@
+{
+  "name": "MAD-BOT-SIG Trading Signals",
+  "short_name": "MAD-BOT-SIG",
+  "description": "Professional crypto trading signals bot",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a1930",
+  "theme_color": "#0a1930",
+  "icons": [
+    {
+      "src": "pwa_icon_512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "pwa_icon_512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
