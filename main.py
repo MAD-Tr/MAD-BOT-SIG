@@ -7,7 +7,27 @@ from tradingview_ta import TA_Handler, Interval
 TOKEN = os.environ.get("TOKEN") or "8828337019:AAHgUTyjrxMk7IkJpMZzseKbroltKInaCes"
 PASSWORD = os.environ.get("PASSWORD") or "7154"
 bot = telebot.TeleBot(TOKEN, threaded=False)
+# ====== كود التطبيق - لا يمسح شي ======
+from flask import Flask as WebFlask, jsonify
+web_app = WebFlask(__name__)
 
+@web_app.route('/')
+def home_page():
+    return """<html><head><link rel="manifest" href="/manifest">
+    <meta name="theme-color" content="#000000">
+    <title>MAD BOT</title></head>
+    <body style="background:#000;color:#fff;text-align:center;padding-top:100px;font-family:Arial">
+    <h1>MAD BOT SIG 🚀</h1><h3>Bot is Live</h3></body></html>"""
+
+@web_app.route('/manifest')
+def manifest_file():
+    return jsonify({"name":"MAD BOT SIG","short_name":"MAD BOT","start_url":"/","display":"standalone","background_color":"#000","theme_color":"#000","icons":[{"src":"https://cdn-icons-png.flaticon.com/512/5968/5968705.png","sizes":"512x512","type":"image/png"}]})
+
+import threading
+def run_web():
+    web_app.run(host='0.0.0.0', port=10000)
+threading.Thread(target=run_web, daemon=True).start()
+# ====== انتهى كود التطبيق ======
 MARKETS = {
     "🇪🇺/🇺🇸 EUR/USD": "EURUSD", "🇺🇸/🇯🇵 USD/JPY": "USDJPY",
     "🇦🇺/🇺🇸 AUD/USD": "AUDUSD", "🇺🇸/🇨🇦 USD/CAD": "USDCAD",
