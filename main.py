@@ -3,6 +3,7 @@ from flask import Flask
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from tradingview_ta import TA_Handler, Interval
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 TOKEN = os.environ.get("TOKEN") or "8828337019:AAHgUTyjrxMk7IkJpMZzseKbroltKInaCes"
 PASSWORD = os.environ.get("PASSWORD") or "7154"
@@ -20,60 +21,49 @@ MARKETS = {
 
 authorized=set()
 
-def get_tf_fixed(symbol, interval):
-    for exchange in ["FX", "FX_IDC", "OANDA"]:
-        try:
-            h = TA_Handler(symbol=symbol, screener="forex", exchange=exchange, interval=interval)
-            a = h.get_analysis()
-            s = a.summary
-            rsi = a.indicators.get("RSI", 50)
-            buys, sells = s['BUY'], s['SELL']
-            if buys+sells==0: continue
-            d="BUY" if buys>sells else "SELL"
-            p=int((max(buys,sells)/(buys+sells))*100)
-            return d,p,rsi
-        except:
-            time.sleep(0.3)
-            continue
-    return "ERROR",0,50
+def get_tf_fast(symbol, interval):
+    try:
+        h = TA_Handler(symbol=symbol, screener="forex", exchange="FX", interval=interval)
+        a = h.get_analysis()
+        s = a.summary
+        rsi = a.indicators.get("RSI", 50)
+        buys, sells = s['BUY'], s['SELL']
+        if buys+sells==0: return "ERROR",0,50
+        d="BUY" if buys>sells else "SELL"
+        p=int((max(buys,sells)/(buys+sells))*100)
+        return d,p,rsi
+    except:
+        return "ERROR",0,50
 
 def get_signal(symbol):
-    d5,p5,rsi5 = get_tf_fixed(symbol, Interval.INTERVAL_5_MINUTES)
-    time.sleep(0.5)
-    d15,p15,rsi15 = get_tf_fixed(symbol, Interval.INTERVAL_15_MINUTES)
-    time.sleep(0.5)
-    d1h,p1h,rsi1h = get_tf_fixed(symbol, Interval.INTERVAL_1_HOUR)
-
+    d5,p5,rsi5 = get_tf_fast(symbol, Interval.INTERVAL_5_MINUTES)
+    d15,p15,rsi15 = get_tf_fast(symbol, Interval.INTERVAL_15_MINUTES)
+    d1h,p1h,rsi1h = get_tf_fast(symbol, Interval.INTERVAL_1_HOUR)
     if "ERROR" in [d5,d15,d1h]:
-        return "NO_TRADE",0,f"⚠️ TradingView معلق جرب بعد دقيقة"
-
+        return "NO_TRADE",0,f"⚠️ معلق"
     if d5==d15==d1h:
         avg=int((p5+p15+p1h)/3)
         final=min(96, avg+5)
         avg_rsi=(rsi5+rsi15+rsi1h)/3
-        if d5=="BUY" and avg_rsi>=75: return "NO_TRADE",0,f"⚠️ متشبع شراء RSI:{int(avg_rsi)}"
-        if d5=="SELL" and avg_rsi<=25: return "NO_TRADE",0,f"⚠️ متشبع بيع RSI:{int(avg_rsi)}"
+        if d5=="BUY" and avg_rsi>=75: return "NO_TRADE",0,f"متشبع"
+        if d5=="SELL" and avg_rsi<=25: return "NO_TRADE",0,f"متشبع"
         if min(p5,p15,p1h) < 75: return "NO_TRADE",0,f"ضعيف"
-        return d5,final,f"H1:{p1h}% RSI:{int(rsi1h)} | 15m:{p15}% RSI:{int(rsi15)} | 5m:{p5}% RSI:{int(rsi5)}\n⏱️ دخول 15 دقيقة - ثقة {final}%"
-    return "NO_TRADE",0,f"H1:{p1h}% {d1h} | 15m:{p15}% {d15} | 5m:{p5}% {d5} - متضارب"
+        return d5,final,f"H1:{p1h}% | 15m:{p15}% | 5m:{p5}% RSI:{int(avg_rsi)} - ثقة {final}%"
+    return "NO_TRADE",0,f"متضارب"
 
 def get_golden_diamond_signal(symbol):
-    d5,p5,rsi5 = get_tf_fixed(symbol, Interval.INTERVAL_5_MINUTES)
-    time.sleep(0.5)
-    d15,p15,rsi15 = get_tf_fixed(symbol, Interval.INTERVAL_15_MINUTES)
-    time.sleep(0.5)
-    d1h,p1h,rsi1h = get_tf_fixed(symbol, Interval.INTERVAL_1_HOUR)
-
+    d5,p5,rsi5 = get_tf_fast(symbol, Interval.INTERVAL_5_MINUTES)
+    d15,p15,rsi15 = get_tf_fast(symbol, Interval.INTERVAL_15_MINUTES)
+    d1h,p1h,rsi1h = get_tf_fast(symbol, Interval.INTERVAL_1_HOUR)
     if "ERROR" in [d5,d15,d1h]:
         return "NO_TRADE",0,"ERROR"
-
     if d5==d15==d1h:
         if min(p5,p15,p1h) >= 90:
             avg=int((p5+p15+p1h)/3)
             final=min(99, avg+7)
             avg_rsi=(rsi5+rsi15+rsi1h)/3
             if 30 < avg_rsi < 70:
-                return d5,final,f"💎 H1:{p1h}% | 15m:{p15}% | 5m:{p5}% RSI:{int(avg_rsi)} - دخول 15د ثقة {final}%"
+                return d5,final,f"💎 H1:{p1h}% | 15m:{p15}% | 5m:{p5}% RSI:{int(avg_rsi)}"
     return "NO_TRADE",0,""
 
 def main_menu(chat_id):
@@ -98,64 +88,59 @@ def pw(m):
 
 def do_golden_scan(chat_id, load_id):
     ok=[]
-    for name,sym in MARKETS.items():
-        try:
-            d,p,det=get_signal(sym)
-            if d!="NO_TRADE" and p>=85:
-                emoji="🟢 BUY" if d=="BUY" else "🔴 SELL"
-                ok.append(f"{emoji} {name} - {p}%\n{det}")
-            time.sleep(0.5)
-        except: continue
-    txt="\n\n".join(ok) if ok else "❌ لا يوجد 85%+ حاليا"
+    with ThreadPoolExecutor(max_workers=14) as ex:
+        futs={ex.submit(get_signal, sym): name for name,sym in MARKETS.items()}
+        for f in as_completed(futs):
+            name=futs[f]
+            try:
+                d,p,det=f.result()
+                if d!="NO_TRADE" and p>=85:
+                    emoji="🟢 BUY" if d=="BUY" else "🔴 SELL"
+                    ok.append(f"{emoji} {name} - {p}%\n{det}")
+            except: continue
+    txt="\n\n".join(ok) if ok else "❌ لا يوجد 85%+ حاليا - جرب 3:30 العصر"
     m=InlineKeyboardMarkup(row_width=1); m.add(InlineKeyboardButton("🔄 تحديث",callback_data="golden"))
-    try:
-        bot.edit_message_text(txt, chat_id, load_id, reply_markup=m)
-    except:
-        bot.send_message(chat_id, txt, reply_markup=m)
+    try: bot.edit_message_text(txt, chat_id, load_id, reply_markup=m)
+    except: bot.send_message(chat_id, txt, reply_markup=m)
 
 def do_diamond_scan(chat_id, load_id):
     ok=[]
-    for name,sym in MARKETS.items():
-        try:
-            d,p,det=get_golden_diamond_signal(sym)
-            if d!="NO_TRADE" and p>=95:
-                emoji="💎🟢 BUY ذهبي" if d=="BUY" else "💎🔴 SELL ذهبي"
-                ok.append(f"{emoji} {name} - {p}%\n{det}")
-            time.sleep(0.5)
-        except: continue
-    if ok:
-        txt=f"💎💎 وجدت {len(ok)} فرص ذهبية 99%:\n\n" + "\n\n".join(ok)
-    else:
-        txt="💎 لا يوجد ذهبي 99% حاليا\nجرب بعد 10 دقايق - وقت الذهب 3:30-6:30 م جدة"
+    with ThreadPoolExecutor(max_workers=14) as ex:
+        futs={ex.submit(get_golden_diamond_signal, sym): name for name,sym in MARKETS.items()}
+        for f in as_completed(futs):
+            name=futs[f]
+            try:
+                d,p,det=f.result()
+                if d!="NO_TRADE" and p>=95:
+                    emoji="💎🟢 BUY" if d=="BUY" else "💎🔴 SELL"
+                    ok.append(f"{emoji} {name} - {p}%\n{det}")
+            except: continue
+    txt=f"💎💎 وجدت {len(ok)} فرص 99%:\n\n" + "\n\n".join(ok) if ok else "💎 لا يوجد 99% حاليا - وقت الذهب 3:30-6:30 م"
     m=InlineKeyboardMarkup(row_width=1)
     m.add(InlineKeyboardButton("💎 تحديث الذهبي",callback_data="golden_diamond"))
     m.add(InlineKeyboardButton("🔥 فحص عادي 85%+",callback_data="golden"))
-    try:
-        bot.edit_message_text(txt, chat_id, load_id, reply_markup=m)
-    except:
-        bot.send_message(chat_id, txt, reply_markup=m)
+    try: bot.edit_message_text(txt, chat_id, load_id, reply_markup=m)
+    except: bot.send_message(chat_id, txt, reply_markup=m)
 
 def do_single_scan(chat_id, load_id, name, sym):
     d,p,det=get_signal(sym)
     txt=f"📊 {name}\n{det}" if d=="NO_TRADE" else f"📊 {name}\n{'🟢 BUY' if d=='BUY' else '🔴 SELL'} {p}%\n{det}"
-    try:
-        bot.edit_message_text(txt, chat_id, load_id)
-    except:
-        bot.send_message(chat_id, txt)
+    try: bot.edit_message_text(txt, chat_id, load_id)
+    except: bot.send_message(chat_id, txt)
 
 @bot.callback_query_handler(func=lambda c: True)
 def calls(call):
     if call.from_user.id not in authorized: return
     bot.answer_callback_query(call.id)
     if call.data=="golden":
-        load=bot.send_message(call.message.chat.id,"⏳ افحص 14 سوق... 20 ثانية فقط")
+        load=bot.send_message(call.message.chat.id,"⚡ فحص صاروخ 14 سوق - 8 ثواني بس...")
         threading.Thread(target=do_golden_scan, args=(call.message.chat.id, load.message_id), daemon=True).start()
     elif call.data=="golden_diamond":
-        load=bot.send_message(call.message.chat.id,"💎 جاري البحث عن 99%... 20 ثانية")
+        load=bot.send_message(call.message.chat.id,"💎 فحص صاروخ 99% - 8 ثواني...")
         threading.Thread(target=do_diamond_scan, args=(call.message.chat.id, load.message_id), daemon=True).start()
     elif call.data=="single":
         m=InlineKeyboardMarkup(row_width=2)
-        for name in MARKETS: m.add(InlineKeyboardButton(name, callback_data=f"s_{name}"))
+        for n in MARKETS: m.add(InlineKeyboardButton(n, callback_data=f"s_{n}"))
         bot.send_message(call.message.chat.id,"اختر:",reply_markup=m)
     elif call.data.startswith("s_"):
         name=call.data[2:]; sym=MARKETS[name]
@@ -164,10 +149,10 @@ def calls(call):
 
 app=Flask(__name__)
 @app.route('/')
-def h(): return "Live V3 Fixed + Diamond"
+def h(): return "Live V4 Turbo"
 def run(): app.run(host="0.0.0.0", port=int(os.environ.get("PORT",10000)))
 threading.Thread(target=run,daemon=True).start()
-bot.remove_webhook(); time.sleep(2)
+bot.remove_webhook(); time.sleep(1)
 while True:
-    try: bot.infinity_polling(skip_pending=True)
-    except: time.sleep(5)
+    try: bot.infinity_polling(skip_pending=True, timeout=60)
+    except: time.sleep(3)
