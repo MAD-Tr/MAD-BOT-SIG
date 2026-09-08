@@ -1,11 +1,9 @@
-import os
-import time
-import threading
-from concurrent.futures import ThreadPoolExecutor
+import os, time, threading
 from flask import Flask
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from tradingview_ta import TA_Handler, Interval
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 TOKEN = os.environ.get("TOKEN") or "8828337019:AAHgUTyjrxMk7IkJpMZzseKbroltKInaCes"
 PASSWORD = os.environ.get("PASSWORD") or "7154"
@@ -20,141 +18,166 @@ MARKETS = {
     "🇺🇸/🇨🇭 USD/CHF": "USDCHF", "🇪🇺/🇨🇦 EUR/CAD": "EURCAD",
     "🇦🇺/🇨🇭 AUD/CHF": "AUDCHF", "🇨🇦/🇨🇭 CAD/CHF": "CADCHF",
 }
+authorized=set()
 
-authorized = set()
-
-def get_tf_fixed(symbol, interval):
+# ========== منطق GainzAlgo V2 Alpha ==========
+def get_tf_gainz(symbol, interval):
     for exchange in ["FX", "FX_IDC", "OANDA"]:
         try:
             h = TA_Handler(symbol=symbol, screener="forex", exchange=exchange, interval=interval)
             a = h.get_analysis()
+            ind = a.indicators
             s = a.summary
-            rsi = a.indicators.get("RSI", 50)
+
+            close = ind.get("close", 0)
+            ema50 = ind.get("EMA50", 0)
+            ema200 = ind.get("EMA200", 0)
+            rsi = ind.get("RSI", 50)
+            macd = ind.get("MACD.macd", 0)
+            macd_sig = ind.get("MACD.signal", 0)
+
             buys, sells = s['BUY'], s['SELL']
-            if buys + sells == 0: continue
-            d = "BUY" if buys > sells else "SELL"
-            p = int((max(buys, sells) / (buys + sells)) * 100)
-            return d, p, rsi
+            if buys+sells==0: continue
+
+            # قوة الاشارة الاساسية
+            base_power = int((max(buys,sells)/(buys+sells))*100)
+
+            # === منطق GainzAlgo ===
+            # BUY: السعر فوق EMA50 فوق EMA200 + RSI صاعد + MACD صاعد
+            if close > ema50 > ema200 and rsi > 55 and rsi < 78 and macd > macd_sig:
+                # كلما RSI اقرب لـ 60-70 القوة تزيد
+                bonus = 10 if 60 <= rsi <= 70 else 5
+                return "BUY", min(98, base_power + bonus), rsi, f"EMA صاعد"
+
+            # SELL: السعر تحت EMA50 تحت EMA200 + RSI نازل + MACD نازل
+            if close < ema50 < ema200 and rsi < 45 and rsi > 22 and macd < macd_sig:
+                bonus = 10 if 30 <= rsi <= 40 else 5
+                return "SELL", min(98, base_power + bonus), rsi, f"EMA هابط"
+
+            # اذا ما في ترتيب EMA واضح = متذبذب
+            return "SIDE", base_power, rsi, "تذبذب"
+
         except:
+            time.sleep(0.3)
             continue
-    return "ERROR", 0, 50
+    return "ERROR",0,50,""
 
 def get_signal(symbol):
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        f5 = executor.submit(get_tf_fixed, symbol, Interval.INTERVAL_5_MINUTES)
-        f15 = executor.submit(get_tf_fixed, symbol, Interval.INTERVAL_15_MINUTES)
-        f1h = executor.submit(get_tf_fixed, symbol, Interval.INTERVAL_1_HOUR)
-        
-        d5, p5, rsi5 = f5.result()
-        d15, p15, rsi15 = f15.result()
-        d1h, p1h, rsi1h = f1h.result()
+    d5,p5,rsi5,txt5 = get_tf_gainz(symbol, Interval.INTERVAL_5_MINUTES)
+    time.sleep(0.3)
+    d15,p15,rsi15,txt15 = get_tf_gainz(symbol, Interval.INTERVAL_15_MINUTES)
+    time.sleep(0.3)
+    d1h,p1h,rsi1h,txt1h = get_tf_gainz(symbol, Interval.INTERVAL_1_HOUR)
 
-    if "ERROR" in [d5, d15, d1h]:
-        return "NO_TRADE", 0, f"⚠️ TradingView معلق جرب بعد دقيقة"
+    if "ERROR" in [d5,d15,d1h]:
+        return "NO_TRADE",0,"⚠️ TradingView معلق"
 
-    if d5 == d15 == d1h:
-        avg = int((p5 + p15 + p1h) / 3)
-        final = min(96, avg + 5)
-        avg_rsi = (rsi5 + rsi15 + rsi1h) / 3
-        if d5 == "BUY" and avg_rsi >= 75: return "NO_TRADE", 0, f"⚠️ متشبع شراء RSI:{int(avg_rsi)}"
-        if d5 == "SELL" and avg_rsi <= 25: return "NO_TRADE", 0, f"⚠️ متشبع بيع RSI:{int(avg_rsi)}"
-        if min(p5, p15, p1h) < 75: return "NO_TRADE", 0, f"ضعيف"
-        return d5, final, f"H1:{p1h}% RSI:{int(rsi1h)} | 15m:{p15}% RSI:{int(rsi15)} | 5m:{p5}% RSI:{int(rsi5)}\n⏱️ دخول 15 دقيقة - ثقة {final}%"
-    return "NO_TRADE", 0, f"H1:{p1h}% {d1h} | 15m:{p15}% {d15} | 5m:{p5}% {d5} - متضارب"
+    # لازم الثلاثة فريمات نفس الاتجاه مثل GainzAlgo
+    if d5==d15==d1h and d5 in ["BUY","SELL"]:
+        avg = int((p5+p15+p1h)/3)
+        final = min(98, avg+3) # +3 مكافأة توافق الفريمات
+        avg_rsi = int((rsi5+rsi15+rsi1h)/3)
 
-def check_market_for_golden(item):
-    name, sym = item
-    try:
-        d, p, det = get_signal(sym)
-        # تشترط نسبة ثقة عالية جداً (90% فأكثر) للفرصة الذهبية
-        if d != "NO_TRADE" and p >= 90:
-            emoji = "🟢 BUY" if d == "BUY" else "🔴 SELL"
-            return p, f"💎 **فرصة ذهبية عالية الثقة**\n{emoji} {name} - ثقة {p}%\n{det}"
-    except:
-        pass
-    return 0, None
+        if final < 75:
+            return "NO_TRADE",0,f"ضعيف {final}%"
 
-def check_single_market(item):
-    name, sym = item
-    try:
-        d, p, det = get_signal(sym)
-        if d != "NO_TRADE" and p >= 85:
-            emoji = "🟢 BUY" if d == "BUY" else "🔴 SELL"
-            return f"{emoji} {name} - {p}%\n{det}"
-    except:
-        pass
-    return None
+        return d5, final, f"💎 GainzAlgo تأكيد:\nH1:{p1h}% {txt1h} RSI:{int(rsi1h)}\n15m:{p15}% {txt15} RSI:{int(rsi15)}\n5m:{p5}% {txt5} RSI:{int(rsi5)}\n⏱️ دخول 15 دقيقة - ثقة {final}%"
+
+    return "NO_TRADE",0,f"H1:{d1h} {p1h}% | 15m:{d15} {p15}% | 5m:{d5} {p5}% - متضارب"
+
+def get_golden_diamond_signal(symbol):
+    d5,p5,rsi5,txt5 = get_tf_gainz(symbol, Interval.INTERVAL_5_MINUTES)
+    time.sleep(0.3)
+    d15,p15,rsi15,txt15 = get_tf_gainz(symbol, Interval.INTERVAL_15_MINUTES)
+    time.sleep(0.3)
+    d1h,p1h,rsi1h,txt1h = get_tf_gainz(symbol, Interval.INTERVAL_1_HOUR)
+
+    if "ERROR" in [d5,d15,d1h]: return "NO_TRADE",0,""
+
+    if d5==d15==d1h and d5 in ["BUY","SELL"]:
+        if min(p5,p15,p1h) >= 88 and 35 < ((rsi5+rsi15+rsi1h)/3) < 65: # RSI مثالي للذهبي
+            avg = int((p5+p15+p1h)/3)
+            final = min(99, avg+6)
+            if final >= 92:
+                return d5, final, f"💎 H1:{p1h}% | 15m:{p15}% | 5m:{p5}% RSI:{int((rsi5+rsi15+rsi1h)/3)} - Gainz 99%"
+    return "NO_TRADE",0,""
 
 def main_menu(chat_id):
-    m = InlineKeyboardMarkup(row_width=1)
-    m.add(InlineKeyboardButton("🔥 فحص شامل 85%+ (14 سوق)", callback_data="golden"))
-    m.add(InlineKeyboardButton("💎 فحص الفرصه الذهبيه (90%+)", callback_data="super_golden"))
-    m.add(InlineKeyboardButton("📊 فحص سوق واحد", callback_data="single"))
-    bot.send_message(chat_id, "🏆 البوت الاسطوري V3", reply_markup=m)
+    m=InlineKeyboardMarkup(row_width=1)
+    m.add(InlineKeyboardButton("💎 Gainz الذهبية 92%+ (نادر)", callback_data="golden_diamond"))
+    m.add(InlineKeyboardButton("🔥 Gainz فحص شامل 80%+ (14 سوق)", callback_data="golden"))
+    m.add(InlineKeyboardButton("📊 فحص سوق واحد Gainz", callback_data="single"))
+    bot.send_message(chat_id,"🏆 MAD-BOT GainzAlgo V2 Style\nEMA50/200 + RSI + MACD - فحص 3 فريمات",reply_markup=m)
 
 @bot.message_handler(commands=['start'])
 def start(msg):
     if msg.from_user.id not in authorized:
-        bot.send_message(msg.chat.id, "🔒 ارسل كلمة السر:"); return
+        bot.send_message(msg.chat.id,"🔒 ارسل كلمة السر:"); return
     main_menu(msg.chat.id)
 
 @bot.message_handler(func=lambda m: m.from_user.id not in authorized)
 def pw(m):
-    if m.text.strip() == PASSWORD:
+    if m.text.strip()==PASSWORD:
         authorized.add(m.from_user.id)
-        bot.send_message(m.chat.id, "✅ تم"); main_menu(m.chat.id)
-    else: bot.send_message(m.chat.id, "❌ غلط")
+        bot.send_message(m.chat.id,"✅ تم - GainzAlgo مفعل"); main_menu(m.chat.id)
+    else: bot.send_message(m.chat.id,"❌ غلط")
 
 @bot.callback_query_handler(func=lambda c: True)
 def calls(call):
     if call.from_user.id not in authorized: return
-    
-    if call.data == "golden":
-        bot.answer_callback_query(call.id, "⏳ افحص...")
-        load = bot.send_message(call.message.chat.id, "⏳ جاري فحص 14 سوق بالتوازي...")
-        
-        with ThreadPoolExecutor(max_workers=14) as executor:
-            results = list(executor.map(check_single_market, MARKETS.items()))
-        
-        ok = [r for r in results if r is not None]
-        txt = "\n\n".join(ok) if ok else "❌ لا يوجد 85%+ حاليا"
-        m = InlineKeyboardMarkup(row_width=1); m.add(InlineKeyboardButton("🔄 تحديث", callback_data="golden"))
+    if call.data=="golden":
+        bot.answer_callback_query(call.id,"⏳ Gainz يفحص...")
+        load=bot.send_message(call.message.chat.id,"⏳ GainzAlgo يفحص 14 سوق (5 ثواني)...")
+        ok=[]
+        with ThreadPoolExecutor(max_workers=14) as ex:
+            futs={ex.submit(get_signal, sym): name for name,sym in MARKETS.items()}
+            for f in as_completed(futs):
+                name=futs[f]
+                try:
+                    d,p,det=f.result()
+                    if d!="NO_TRADE" and p>=80:
+                        emoji="🟢 BUY" if d=="BUY" else "🔴 SELL"
+                        ok.append(f"{emoji} {name} - {p}%\n{det}")
+                except: continue
+        txt="\n\n".join(ok) if ok else "❌ لا يوجد Gainz 80%+ حاليا - السوق متذبذب (هذا يحميك)"
+        m=InlineKeyboardMarkup(row_width=1); m.add(InlineKeyboardButton("🔄 تحديث Gainz",callback_data="golden"))
         bot.edit_message_text(txt, call.message.chat.id, load.message_id, reply_markup=m)
-        
-    elif call.data == "super_golden":
-        bot.answer_callback_query(call.id, "💎 جاري البحث عن أفضل فرصة...")
-        load = bot.send_message(call.message.chat.id, "💎 جاري البحث عن فرصة ذهبية (90%+)...")
-        
-        with ThreadPoolExecutor(max_workers=14) as executor:
-            results = list(executor.map(check_market_for_golden, MARKETS.items()))
-        
-        # استخراج الفرص وصفر الحالات الضعيفة، واختيار الأعلى نسبة
-        valid_opportunities = [r for r in results if r[1] is not None]
-        if valid_opportunities:
-            valid_opportunities.sort(key=lambda x: x[0], reverse=True)
-            txt = "\n\n".join([item[1] for item in valid_opportunities])
-        else:
-            txt = "❌ لا توجد فرصة ذهبية بنسبة 90%+ في الوقت الحالي. جرب الفحص الشامل."
-            
-        m = InlineKeyboardMarkup(row_width=1); m.add(InlineKeyboardButton("🔄 إعادة البحث عن فرصة ذهبية", callback_data="super_golden"))
-        bot.edit_message_text(txt, call.message.chat.id, load.message_id, reply_markup=m)
-        
-    elif call.data == "single":
-        m = InlineKeyboardMarkup(row_width=2)
-        for name in MARKETS: m.add(InlineKeyboardButton(name, callback_data=f"s_{name}"))
-        bot.send_message(call.message.chat.id, "اختر:", reply_markup=m)
-        
-    elif call.data.startswith("s_"):
-        name = call.data[2:]; sym = MARKETS[name]
-        load = bot.send_message(call.message.chat.id, f"⏳ {name}...")
-        d, p, det = get_signal(sym)
-        bot.edit_message_text(f"📊 {name}\n{det}" if d == "NO_TRADE" else f"📊 {name}\n{'🟢 BUY' if d == 'BUY' else '🔴 SELL'} {p}%\n{det}", call.message.chat.id, load.message_id)
 
-app = Flask(__name__)
+    elif call.data=="golden_diamond":
+        bot.answer_callback_query(call.id,"💎 Gainz ذهبي...")
+        load=bot.send_message(call.message.chat.id,"💎 فحص Gainz الذهبية 92%+...")
+        ok=[]
+        with ThreadPoolExecutor(max_workers=14) as ex:
+            futs={ex.submit(get_golden_diamond_signal, sym): name for name,sym in MARKETS.items()}
+            for f in as_completed(futs):
+                name=futs[f]
+                try:
+                    d,p,det=f.result()
+                    if d!="NO_TRADE":
+                        emoji="💎🟢 BUY" if d=="BUY" else "💎🔴 SELL"
+                        ok.append(f"{emoji} {name} - {p}%\n{det}")
+                except: continue
+        txt=f"💎 وجدت {len(ok)} فرص Gainz ذهبية:\n\n" + "\n\n".join(ok) if ok else "💎 لا يوجد 92%+ حاليا"
+        m=InlineKeyboardMarkup(row_width=1)
+        m.add(InlineKeyboardButton("💎 تحديث الذهبي",callback_data="golden_diamond"))
+        m.add(InlineKeyboardButton("🔥 فحص Gainz عادي",callback_data="golden"))
+        bot.edit_message_text(txt, call.message.chat.id, load.message_id, reply_markup=m)
+
+    elif call.data=="single":
+        m=InlineKeyboardMarkup(row_width=2)
+        for name in MARKETS: m.add(InlineKeyboardButton(name, callback_data=f"s_{name}"))
+        bot.send_message(call.message.chat.id,"اختر سوق - فحص Gainz:",reply_markup=m)
+    elif call.data.startswith("s_"):
+        name=call.data[2:]; sym=MARKETS[name]
+        load=bot.send_message(call.message.chat.id,f"⏳ Gainz يفحص {name}...")
+        d,p,det=get_signal(sym)
+        bot.edit_message_text(f"📊 {name}\n{det}" if d=="NO_TRADE" else f"📊 {name}\n{'🟢 BUY' if d=='BUY' else '🔴 SELL'} {p}%\n{det}", call.message.chat.id, load.message_id)
+
+app=Flask(__name__)
 @app.route('/')
-def h(): return "Live V3 Fixed"
-def run(): app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
-threading.Thread(target=run, daemon=True).start()
+def h(): return "Live GainzAlgo V2"
+def run(): app.run(host="0.0.0.0", port=int(os.environ.get("PORT",10000)))
+threading.Thread(target=run,daemon=True).start()
 bot.remove_webhook(); time.sleep(2)
 while True:
     try: bot.infinity_polling(skip_pending=True)
