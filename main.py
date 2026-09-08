@@ -66,6 +66,12 @@ def get_golden_diamond_signal(symbol):
                 return d5,final,f"💎 H1:{p1h}% | 15m:{p15}% | 5m:{p5}% RSI:{int(avg_rsi)}"
     return "NO_TRADE",0,""
 
+# === الميزة الجديدة فقط ===
+def make_bar(p):
+    filled = p // 10
+    bar = "▓" * filled + "░" * (10 - filled)
+    return f"{bar} %{p}"
+
 def main_menu(chat_id):
     m=InlineKeyboardMarkup(row_width=1)
     m.add(InlineKeyboardButton("💎 السوق الذهبي 99% (نادر)", callback_data="golden_diamond"))
@@ -87,6 +93,15 @@ def pw(m):
     else: bot.send_message(m.chat.id,"❌ غلط")
 
 def do_golden_scan(chat_id, load_id):
+    stop = threading.Event()
+    def animate():
+        for i in range(1, 101):
+            if stop.is_set(): break
+            try: bot.edit_message_text(f"🔥 جاري الفحص شامل {make_bar(i)}", chat_id, load_id)
+            except: pass
+            time.sleep(0.08)
+    threading.Thread(target=animate, daemon=True).start()
+
     ok=[]
     with ThreadPoolExecutor(max_workers=14) as ex:
         futs={ex.submit(get_signal, sym): name for name,sym in MARKETS.items()}
@@ -98,12 +113,23 @@ def do_golden_scan(chat_id, load_id):
                     emoji="🟢 BUY" if d=="BUY" else "🔴 SELL"
                     ok.append(f"{emoji} {name} - {p}%\n{det}")
             except: continue
+    stop.set()
+    time.sleep(0.2)
     txt="\n\n".join(ok) if ok else "❌ لا يوجد 85%+ حاليا - جرب 3:30 العصر"
     m=InlineKeyboardMarkup(row_width=1); m.add(InlineKeyboardButton("🔄 تحديث",callback_data="golden"))
     try: bot.edit_message_text(txt, chat_id, load_id, reply_markup=m)
     except: bot.send_message(chat_id, txt, reply_markup=m)
 
 def do_diamond_scan(chat_id, load_id):
+    stop = threading.Event()
+    def animate():
+        for i in range(1, 101):
+            if stop.is_set(): break
+            try: bot.edit_message_text(f"💎 جاري الفحص {make_bar(i)}", chat_id, load_id)
+            except: pass
+            time.sleep(0.08)
+    threading.Thread(target=animate, daemon=True).start()
+
     ok=[]
     with ThreadPoolExecutor(max_workers=14) as ex:
         futs={ex.submit(get_golden_diamond_signal, sym): name for name,sym in MARKETS.items()}
@@ -115,6 +141,8 @@ def do_diamond_scan(chat_id, load_id):
                     emoji="💎🟢 BUY" if d=="BUY" else "💎🔴 SELL"
                     ok.append(f"{emoji} {name} - {p}%\n{det}")
             except: continue
+    stop.set()
+    time.sleep(0.2)
     txt=f"💎💎 وجدت {len(ok)} فرص 99%:\n\n" + "\n\n".join(ok) if ok else "💎 لا يوجد 99% حاليا - وقت الذهب 3:30-6:30 م"
     m=InlineKeyboardMarkup(row_width=1)
     m.add(InlineKeyboardButton("💎 تحديث الذهبي",callback_data="golden_diamond"))
@@ -123,7 +151,18 @@ def do_diamond_scan(chat_id, load_id):
     except: bot.send_message(chat_id, txt, reply_markup=m)
 
 def do_single_scan(chat_id, load_id, name, sym):
+    stop = threading.Event()
+    def animate():
+        for i in range(1, 101):
+            if stop.is_set(): break
+            try: bot.edit_message_text(f"📊 جاري فحص سوق واحد {make_bar(i)}", chat_id, load_id)
+            except: pass
+            time.sleep(0.06)
+    threading.Thread(target=animate, daemon=True).start()
+
     d,p,det=get_signal(sym)
+    stop.set()
+    time.sleep(0.2)
     txt=f"📊 {name}\n{det}" if d=="NO_TRADE" else f"📊 {name}\n{'🟢 BUY' if d=='BUY' else '🔴 SELL'} {p}%\n{det}"
     try: bot.edit_message_text(txt, chat_id, load_id)
     except: bot.send_message(chat_id, txt)
@@ -133,10 +172,10 @@ def calls(call):
     if call.from_user.id not in authorized: return
     bot.answer_callback_query(call.id)
     if call.data=="golden":
-        load=bot.send_message(call.message.chat.id,"⚡ فحص صاروخ 14 سوق - 8 ثواني بس...")
+        load=bot.send_message(call.message.chat.id,f"🔥 جاري الفحص شامل {make_bar(1)}")
         threading.Thread(target=do_golden_scan, args=(call.message.chat.id, load.message_id), daemon=True).start()
     elif call.data=="golden_diamond":
-        load=bot.send_message(call.message.chat.id,"💎 فحص صاروخ 99% - 8 ثواني...")
+        load=bot.send_message(call.message.chat.id,f"💎 جاري الفحص {make_bar(1)}")
         threading.Thread(target=do_diamond_scan, args=(call.message.chat.id, load.message_id), daemon=True).start()
     elif call.data=="single":
         m=InlineKeyboardMarkup(row_width=2)
@@ -144,7 +183,7 @@ def calls(call):
         bot.send_message(call.message.chat.id,"اختر:",reply_markup=m)
     elif call.data.startswith("s_"):
         name=call.data[2:]; sym=MARKETS[name]
-        load=bot.send_message(call.message.chat.id,f"⏳ {name}...")
+        load=bot.send_message(call.message.chat.id,f"📊 جاري فحص سوق واحد {make_bar(1)}")
         threading.Thread(target=do_single_scan, args=(call.message.chat.id, load.message_id, name, sym), daemon=True).start()
 
 app=Flask(__name__)
