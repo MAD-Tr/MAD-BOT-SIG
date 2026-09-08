@@ -81,7 +81,7 @@ def main_menu(chat_id):
     m.add(InlineKeyboardButton("💎 السوق الذهبي 99% (نادر)", callback_data="golden_diamond"))
     m.add(InlineKeyboardButton("🔥 فحص شامل 85%+ (14 سوق)", callback_data="golden"))
     m.add(InlineKeyboardButton("📊 فحص سوق واحد", callback_data="single"))
-    bot.send_message(chat_id,"🏆 البوت الاسطوري V3 - جدة",reply_markup=m)
+    bot.send_message(chat_id,"🏆 البوت الاسطوري V3 💸",reply_markup=m)
 
 @bot.message_handler(commands=['start'])
 def start(msg):
@@ -96,7 +96,6 @@ def pw(m):
         bot.send_message(m.chat.id,"✅ تم"); main_menu(m.chat.id)
     else: bot.send_message(m.chat.id,"❌ غلط")
 
-# ===== الدوال اللي ما تعلق - الحل الجديد =====
 def do_golden_scan(chat_id, load_id):
     ok=[]
     for name,sym in MARKETS.items():
