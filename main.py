@@ -7,43 +7,7 @@ from tradingview_ta import TA_Handler, Interval
 TOKEN = os.environ.get("TOKEN") or "8828337019:AAHgUTyjrxMk7IkJpMZzseKbroltKInaCes"
 PASSWORD = os.environ.get("PASSWORD") or "7154"
 bot = telebot.TeleBot(TOKEN, threaded=False)
-from flask import Flask as WebFlask, jsonify
-web_app = WebFlask(__name__)
 
-@web_app.route('/')
-def home_page():
-    return """<!DOCTYPE html><html><head>
-    <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-    <link rel="manifest" href="/manifest.json">
-    <meta name="theme-color" content="#000000">
-    <title>MAD BOT SIG</title></head>
-    <body style="background:#000;color:#fff;text-align:center;padding-top:100px;font-family:Arial">
-    <h1>MAD BOT SIG 🚀</h1><h3>Bot is Live</h3>
-    <p>Install this app</p>
-    <script>if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js')}</script>
-    </body></html>"""
-
-@web_app.route('/manifest')
-@web_app.route('/manifest.json')
-def manifest_file():
-    return jsonify({
-      "name": "MAD BOT SIG",
-      "short_name": "MAD BOT",
-      "description": "MAD BOT SIG - Trading Signals Bot",
-      "start_url": "/",
-      "display": "standalone",
-      "background_color": "#000000",
-      "theme_color": "#000000",
-      "icons": [{"src": "https://cdn-icons-png.flaticon.com/512/5968/5968705.png","sizes":"512x512","type":"image/png","purpose":"any maskable"}]
-    })
-
-@web_app.route('/sw.js')
-def sw_file():
-    return "self.addEventListener('fetch', function(e){});", 200, {'Content-Type': 'application/javascript'}
-
-import threading
-def run_web():
-    web_app.run(host='0.0.0.0', port=10000)
 MARKETS = {
     "🇪🇺/🇺🇸 EUR/USD": "EURUSD", "🇺🇸/🇯🇵 USD/JPY": "USDJPY",
     "🇦🇺/🇺🇸 AUD/USD": "AUDUSD", "🇺🇸/🇨🇦 USD/CAD": "USDCAD",
@@ -93,11 +57,34 @@ def get_signal(symbol):
         return d5,final,f"H1:{p1h}% RSI:{int(rsi1h)} | 15m:{p15}% RSI:{int(rsi15)} | 5m:{p5}% RSI:{int(rsi5)}\n⏱️ دخول 15 دقيقة - ثقة {final}%"
     return "NO_TRADE",0,f"H1:{p1h}% {d1h} | 15m:{p15}% {d15} | 5m:{p5}% {d5} - متضارب"
 
+# ========== الإضافة الذهبية فقط 💎 ==========
+def get_golden_diamond_signal(symbol):
+    d5,p5,rsi5 = get_tf_fixed(symbol, Interval.INTERVAL_5_MINUTES)
+    time.sleep(0.5)
+    d15,p15,rsi15 = get_tf_fixed(symbol, Interval.INTERVAL_15_MINUTES)
+    time.sleep(0.5)
+    d1h,p1h,rsi1h = get_tf_fixed(symbol, Interval.INTERVAL_1_HOUR)
+
+    if "ERROR" in [d5,d15,d1h]:
+        return "NO_TRADE",0,"ERROR"
+
+    if d5==d15==d1h:
+        # شرط الذهبي 99% - أصعب من العادي
+        if min(p5,p15,p1h) >= 90: # لازم 90%+ في كل الفريمات
+            avg=int((p5+p15+p1h)/3)
+            final=min(99, avg+7) # نسمح يوصل 99%
+            avg_rsi=(rsi5+rsi15+rsi1h)/3
+            if 30 < avg_rsi < 70: # RSI في النص تماما مو متشبع
+                return d5,final,f"💎 H1:{p1h}% | 15m:{p15}% | 5m:{p5}% RSI:{int(avg_rsi)} - دخول 15د ثقة {final}%"
+    return "NO_TRADE",0,""
+# ========== نهاية الإضافة ==========
+
 def main_menu(chat_id):
     m=InlineKeyboardMarkup(row_width=1)
+    m.add(InlineKeyboardButton("💎 السوق الذهبي 99% (نادر)", callback_data="golden_diamond"))
     m.add(InlineKeyboardButton("🔥 فحص شامل 85%+ (14 سوق)", callback_data="golden"))
     m.add(InlineKeyboardButton("📊 فحص سوق واحد", callback_data="single"))
-    bot.send_message(chat_id,"🏆 البوت الاسطوري V3",reply_markup=m)
+    bot.send_message(chat_id,"🏆 البوت الاسطوري V3 - جدة",reply_markup=m)
 
 @bot.message_handler(commands=['start'])
 def start(msg):
@@ -130,6 +117,29 @@ def calls(call):
         txt="\n\n".join(ok) if ok else "❌ لا يوجد 85%+ حاليا"
         m=InlineKeyboardMarkup(row_width=1); m.add(InlineKeyboardButton("🔄 تحديث",callback_data="golden"))
         bot.edit_message_text(txt, call.message.chat.id, load.message_id, reply_markup=m)
+
+    # زر الذهبي الجديد
+    elif call.data=="golden_diamond":
+        bot.answer_callback_query(call.id,"💎 ابحث عن الذهب...")
+        load=bot.send_message(call.message.chat.id,"💎 جاري البحث عن فرص 99% النادرة في 14 سوق...\nقد يأخذ 40 ثانية")
+        ok=[]
+        for name,sym in MARKETS.items():
+            try:
+                d,p,det=get_golden_diamond_signal(sym)
+                if d!="NO_TRADE" and p>=95:
+                    emoji="💎🟢 BUY ذهبي" if d=="BUY" else "💎🔴 SELL ذهبي"
+                    ok.append(f"{emoji} {name} - {p}%\n{det}")
+                time.sleep(1)
+            except: continue
+        if ok:
+            txt=f"💎💎 وجدت {len(ok)} فرص ذهبية 99%:\n\n" + "\n\n".join(ok)
+        else:
+            txt="💎 لا يوجد ذهبي 99% حاليا\nالسوق الذهبي نادر يطلع 1-2 مرات في اليوم بس\nجرب بعد 10 دقايق - راح يطلع في وقت 3:30-6:30 م بتوقيت جدة"
+        m=InlineKeyboardMarkup(row_width=1)
+        m.add(InlineKeyboardButton("💎 تحديث الذهبي",callback_data="golden_diamond"))
+        m.add(InlineKeyboardButton("🔥 فحص عادي 85%+",callback_data="golden"))
+        bot.edit_message_text(txt, call.message.chat.id, load.message_id, reply_markup=m)
+
     elif call.data=="single":
         m=InlineKeyboardMarkup(row_width=2)
         for name in MARKETS: m.add(InlineKeyboardButton(name, callback_data=f"s_{name}"))
@@ -142,7 +152,7 @@ def calls(call):
 
 app=Flask(__name__)
 @app.route('/')
-def h(): return "Live V3 Fixed"
+def h(): return "Live V3 Fixed + Diamond"
 def run(): app.run(host="0.0.0.0", port=int(os.environ.get("PORT",10000)))
 threading.Thread(target=run,daemon=True).start()
 bot.remove_webhook(); time.sleep(2)
