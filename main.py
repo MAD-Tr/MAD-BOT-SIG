@@ -3,6 +3,7 @@ from flask import Flask
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from tradingview_ta import TA_Handler, Interval
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 TOKEN = os.environ.get("TOKEN") or "8828337019:AAHgUTyjrxMk7IkJpMZzseKbroltKInaCes"
 PASSWORD = os.environ.get("PASSWORD") or "7154"
@@ -57,7 +58,6 @@ def get_signal(symbol):
         return d5,final,f"H1:{p1h}% RSI:{int(rsi1h)} | 15m:{p15}% RSI:{int(rsi15)} | 5m:{p5}% RSI:{int(rsi5)}\n⏱️ دخول 15 دقيقة - ثقة {final}%"
     return "NO_TRADE",0,f"H1:{p1h}% {d1h} | 15m:{p15}% {d15} | 5m:{p5}% {d5} - متضارب"
 
-# === هذا فقط اللي ضفته - زر الفرصة الذهبية ===
 def get_golden_diamond_signal(symbol):
     d5,p5,rsi5 = get_tf_fixed(symbol, Interval.INTERVAL_5_MINUTES)
     time.sleep(0.5)
@@ -100,36 +100,43 @@ def calls(call):
     if call.from_user.id not in authorized: return
     if call.data=="golden":
         bot.answer_callback_query(call.id,"⏳ افحص...")
-        load=bot.send_message(call.message.chat.id,"⏳ افحص 14 سوق (30 ثانية)...")
+        load=bot.send_message(call.message.chat.id,"⏳ افحص 14 سوق (5 ثواني)...")
         ok=[]
-        for name,sym in MARKETS.items():
-            try:
-                d,p,det=get_signal(sym)
-                if d!="NO_TRADE" and p>=85:
-                    emoji="🟢 BUY" if d=="BUY" else "🔴 SELL"
-                    ok.append(f"{emoji} {name} - {p}%\n{det}")
-                time.sleep(1)
-            except: continue
+        # === هنا السرعة فقط - يفحص 14 سوق مع بعض ===
+        with ThreadPoolExecutor(max_workers=14) as ex:
+            futs={ex.submit(get_signal, sym): name for name,sym in MARKETS.items()}
+            for f in as_completed(futs):
+                name=futs[f]
+                try:
+                    d,p,det=f.result()
+                    if d!="NO_TRADE" and p>=85:
+                        emoji="🟢 BUY" if d=="BUY" else "🔴 SELL"
+                        ok.append(f"{emoji} {name} - {p}%\n{det}")
+                except: continue
         txt="\n\n".join(ok) if ok else "❌ لا يوجد 85%+ حاليا"
         m=InlineKeyboardMarkup(row_width=1); m.add(InlineKeyboardButton("🔄 تحديث",callback_data="golden"))
         bot.edit_message_text(txt, call.message.chat.id, load.message_id, reply_markup=m)
+
     elif call.data=="golden_diamond":
         bot.answer_callback_query(call.id,"💎 افحص الذهبي...")
-        load=bot.send_message(call.message.chat.id,"💎 افحص الفرص الذهبية 95%+ (30 ثانية)...")
+        load=bot.send_message(call.message.chat.id,"💎 افحص الفرص الذهبية 95%+ (5 ثواني)...")
         ok=[]
-        for name,sym in MARKETS.items():
-            try:
-                d,p,det=get_golden_diamond_signal(sym)
-                if d!="NO_TRADE" and p>=95:
-                    emoji="💎🟢 BUY" if d=="BUY" else "💎🔴 SELL"
-                    ok.append(f"{emoji} {name} - {p}%\n{det}")
-                time.sleep(1)
-            except: continue
-        txt=f"💎💎 وجدت {len(ok)} فرص ذهبية:\n\n" + "\n\n".join(ok) if ok else "💎 لا يوجد 95%+ حاليا - الذهبي نادر يطلع 3:30-6:30 م"
+        with ThreadPoolExecutor(max_workers=14) as ex:
+            futs={ex.submit(get_golden_diamond_signal, sym): name for name,sym in MARKETS.items()}
+            for f in as_completed(futs):
+                name=futs[f]
+                try:
+                    d,p,det=f.result()
+                    if d!="NO_TRADE" and p>=95:
+                        emoji="💎🟢 BUY" if d=="BUY" else "💎🔴 SELL"
+                        ok.append(f"{emoji} {name} - {p}%\n{det}")
+                except: continue
+        txt=f"💎💎 وجدت {len(ok)} فرص ذهبية:\n\n" + "\n\n".join(ok) if ok else "💎 لا يوجد 95%+ حاليا"
         m=InlineKeyboardMarkup(row_width=1)
         m.add(InlineKeyboardButton("💎 تحديث الذهبي",callback_data="golden_diamond"))
         m.add(InlineKeyboardButton("🔥 فحص عادي 85%+",callback_data="golden"))
         bot.edit_message_text(txt, call.message.chat.id, load.message_id, reply_markup=m)
+
     elif call.data=="single":
         m=InlineKeyboardMarkup(row_width=2)
         for name in MARKETS: m.add(InlineKeyboardButton(name, callback_data=f"s_{name}"))
@@ -142,7 +149,7 @@ def calls(call):
 
 app=Flask(__name__)
 @app.route('/')
-def h(): return "Live V3 Fixed"
+def h(): return "Live V3 Turbo Fixed"
 def run(): app.run(host="0.0.0.0", port=int(os.environ.get("PORT",10000)))
 threading.Thread(target=run,daemon=True).start()
 bot.remove_webhook(); time.sleep(2)
