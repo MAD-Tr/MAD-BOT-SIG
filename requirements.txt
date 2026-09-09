@@ -1,3 +1,6 @@
 pyTelegramBotAPI
 tradingview-ta
 Flask
+yfinance
+pandas_ta
+requests
