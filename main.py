@@ -8,29 +8,40 @@ import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from tradingview_ta import TA_Handler, Interval
 
-# استدعاء المتغيرات بأمان (يمكنك وضع قيم افتراضية للتجربة المحلية)
+# استدعاء القيم من متغيرات البيئة تلقائياً
 TOKEN = os.environ.get("TOKEN") or "8828337019:AAHgUTyjrxMk7IkJpMZzseKbroltKInaCes"
 PASSWORD = os.environ.get("PASSWORD") or "7154"
 
 bot = telebot.TeleBot(TOKEN, threaded=False)
 
+# القائمة المحددة المقتصرة على الـ 13 زوجاً فقط
 MARKETS = {
-    "🇪🇺/🇺🇸 EUR/USD": "EURUSD", "🇬🇧/🇺🇸 GBP/USD": "GBPUSD", "🇺🇸/🇯🇵 USD/JPY": "USDJPY",
-    "🇦🇺/🇺🇸 AUD/USD": "AUDUSD", "🇺🇸/🇨🇦 USD/CAD": "USDCAD", "🇪🇺/🇯🇵 EUR/JPY": "EURJPY",
-    "🇨🇦/🇯🇵 CAD/JPY": "CADJPY", "🇪🇺/🇬🇧 EUR/GBP": "EURGBP", "🇦🇺/🇯🇵 AUD/JPY": "AUDJPY",
-    "🇳🇿/🇺🇸 NZD/USD": "NZDUSD", "🇪🇺/🇨🇭 EUR/CHF": "EURCHF", "🇬🇧/🇯🇵 GBP/JPY": "GBPJPY",
-    "🇦🇺/🇨🇦 AUD/CAD": "AUDCAD", "🇪🇺/🇦🇺 EUR/AUD": "EURAUD", "🇬🇧/🇨🇭 GBP/CHF": "GBPCHF",
-    "🇺🇸/🇨🇭 USD/CHF": "USDCHF", "🇪🇺/🇨🇦 EUR/CAD": "EURCAD", "🇦🇺/🇨🇭 AUD/CHF": "AUDCHF",
-    "🇬🇧/🇦🇺 GBP/AUD": "GBPAUD", "🇨🇦/🇨🇭 CAD/CHF": "CADCHF", "🇪🇺/🇳🇿 EUR/NZD": "EURNZD",
-    "🇬🇧/🇳🇿 GBP/NZD": "GBPNZD",
+    "🇪🇺/🇺🇸 EUR/USD": "EURUSD",
+    "🇺🇸/🇯🇵 USD/JPY": "USDJPY",
+    "🇦🇺/🇺🇸 AUD/USD": "AUDUSD",
+    "🇺🇸/🇨🇦 USD/CAD": "USDCAD",
+    "🇪🇺/🇯🇵 EUR/JPY": "EURJPY",
+    "🇨🇦/🇯🇵 CAD/JPY": "CADJPY",
+    "🇦🇺/🇯🇵 AUD/JPY": "AUDJPY",
+    "🇪🇺/🇨🇭 EUR/CHF": "EURCHF",
+    "🇦🇺/🇨🇦 AUD/CAD": "AUDCAD",
+    "🇪🇺/🇦🇺 EUR/AUD": "EURAUD",
+    "🇺🇸/🇨🇭 USD/CHF": "USDCHF",
+    "🇪🇺/🇨🇦 EUR/CAD": "EURCAD",
+    "🇦🇺/🇨🇭 AUD/CHF": "AUDCHF",
+    "🇨🇦/🇨🇭 CAD/CHF": "CADCHF",
 }
 
 user_data = {}
 last_request = {}
 authorized = set()
 
+# متغيرات حالة التنبيه التلقائي
+auto_alert_active = False
+auto_alert_stop_time = None
+
 def fetch_tf_data(symbol, interval):
-    """جلب بيانات التحليل والمؤشرات التفصيلية لفريم معيين"""
+    """جلب بيانات التحليل والمؤشرات التفصيلية"""
     try:
         h = TA_Handler(
             symbol=symbol,
@@ -44,26 +55,24 @@ def fetch_tf_data(symbol, interval):
         return None, None
 
 def analyze_confluence(symbol):
-    """تحليل متكامل لـ 3 أطر زمنية مع تصفية الدخول الفني"""
+    """تحليل 3 أطر زمنية مع تصفية الدخول الفني"""
     s5, ind5 = fetch_tf_data(symbol, Interval.INTERVAL_5_MINUTES)
     s15, ind15 = fetch_tf_data(symbol, Interval.INTERVAL_15_MINUTES)
     s1h, ind1h = fetch_tf_data(symbol, Interval.INTERVAL_1_HOUR)
 
     if not s5 or not s15 or not s1h:
-        return "ERROR", 0, "❌ خطأ في الاتصال بسيرفر التحليل"
+        return "ERROR", 0, "❌ خطأ في جلب بيانات السوق", False
 
-    # تحديد اتجاه كل فريم بناءً على غالبية المؤشرات
     d5 = "BUY" if s5['BUY'] > s5['SELL'] else "SELL"
     d15 = "BUY" if s15['BUY'] > s15['SELL'] else "SELL"
     d1h = "BUY" if s1h['BUY'] > s1h['SELL'] else "SELL"
 
-    # 1. شرط توافق الاتجاه الكلي
+    # شرط الاتجاه الموحد بين الفريمات
     if d5 == d15 == d1h:
         p5 = int((max(s5['BUY'], s5['SELL']) / max(1, s5['BUY'] + s5['SELL'])) * 100)
         p15 = int((max(s15['BUY'], s15['SELL']) / max(1, s15['BUY'] + s15['SELL'])) * 100)
         p1h = int((max(s1h['BUY'], s1h['SELL']) / max(1, s1h['BUY'] + s1h['SELL'])) * 100)
 
-        # 2. قراءة مؤشرات الزخم والارتداد لـ 5m
         rsi_5m = ind5.get("RSI", 50)
         stoch_k = ind5.get("Stoch.K", 50)
         stoch_d = ind5.get("Stoch.D", 50)
@@ -72,7 +81,6 @@ def analyze_confluence(symbol):
         quality_msg = ""
         is_golden = False
 
-        # شروط الدخول الذهبي المؤكد
         if d5 == "BUY" and rsi_5m < 50 and stoch_k > stoch_d:
             quality_msg = "🔥 دخول ذهبي مؤكد (ارتداد صاعد مع الاتجاه)"
             confidence = min(92, confidence + 8)
@@ -89,8 +97,8 @@ def analyze_confluence(symbol):
         expiry_time = (now_time + timedelta(minutes=15)).strftime("%H:%M:%S")
 
         details = (
-            f"⏱️ **توقيت الدخول:** `{entry_time}`\n"
-            f"⏳ **مدة الصفقة:** 15 دقيقة (تغلق `{expiry_time}`)\n"
+            f"⏱️ **توقيت التقرير:** `{entry_time}`\n"
+            f"⏳ **مدة الصفقة المفضلة:** 15 دقيقة (تغلق `{expiry_time}`)\n"
             f"📊 **قوة الاتجاه:** H1:{p1h}% | 15m:{p15}% | 5m:{p5}%\n"
             f"🎯 **التقييم:** {quality_msg}"
         )
@@ -109,11 +117,57 @@ def process_single_market(item):
         pass
     return None
 
+def auto_scanner_loop():
+    """خيط خلفي يعمل دائماً لفحص السوق قبل بداية الشمعة الجديدة بدقيقة"""
+    global auto_alert_active, auto_alert_stop_time
+    already_scanned_minute = -1
+
+    while True:
+        try:
+            now = datetime.now()
+            
+            # التحقق من انتهاء مهلة 24 ساعة
+            if auto_alert_active and auto_alert_stop_time and now >= auto_alert_stop_time:
+                auto_alert_active = False
+                for user_id in authorized:
+                    bot.send_message(user_id, "ℹ️ **انتهت مدة التنبيه التلقائي (24 ساعة).**\nيمكنك إعادة إشعاله من القائمة الرئيسية.", parse_mode="Markdown")
+
+            # الفحص فقط إذا كان التنبيه مفعلاً وفي الدقائق 14, 29, 44, 59
+            if auto_alert_active and now.minute in [14, 29, 44, 59]:
+                if now.minute != already_scanned_minute:
+                    already_scanned_minute = now.minute
+                    
+                    with ThreadPoolExecutor(max_workers=10) as executor:
+                        results = list(executor.map(process_single_market, MARKETS.items()))
+                    
+                    goldens = [res for res in results if res is not None]
+
+                    if goldens:
+                        alert_msg = f"🔔 **تنبيه عاجل: فرصة قادمة خلال 60 ثانية!** 🔔\n\n" + "\n---\n".join(goldens) + "\n\n👉 **افتح المنصة وتجهز لدخول الشمعة الجديدة (15m)!**"
+                        for user_id in authorized:
+                            bot.send_message(user_id, alert_msg, parse_mode="Markdown")
+            else:
+                if now.minute not in [14, 29, 44, 59]:
+                    already_scanned_minute = -1
+
+        except Exception as e:
+            print(f"Auto scanner error: {e}")
+        
+        time.sleep(10)
+
 def main_menu(chat_id):
     markup = InlineKeyboardMarkup(row_width=1)
-    markup.add(InlineKeyboardButton("🔥 البحث عن الفرص الذهبية (22 سوق)", callback_data="golden"))
+    
+    status_icon = "🟢 (مفعل)" if auto_alert_active else "🔴 (معطل)"
+    if auto_alert_active:
+        markup.add(InlineKeyboardButton(f"🔕 إيقاف التنبيه التلقائي {status_icon}", callback_data="toggle_auto"))
+    else:
+        markup.add(InlineKeyboardButton(f"🔔 تشغيل التنبيه التلقائي 24h {status_icon}", callback_data="toggle_auto"))
+        
+    markup.add(InlineKeyboardButton(f"🔥 فحص شامل يدوي ({len(MARKETS)} سوق)", callback_data="golden"))
     markup.add(InlineKeyboardButton("📊 فحص سوق واحد", callback_data="single"))
-    bot.send_message(chat_id, "⚙️ **بوت التحليل المتقدم (Triple TF + Momentum)**\nاختر من القائمة:", parse_mode="Markdown", reply_markup=markup)
+    
+    bot.send_message(chat_id, "⚙️ **لوحة تحكم البوت (Triple TF + Auto Scanner)**\nاختر الخيار المناسب:", parse_mode="Markdown", reply_markup=markup)
 
 @bot.message_handler(commands=['start'])
 def start(msg):
@@ -131,6 +185,24 @@ def check_pass(m):
     else:
         bot.send_message(m.chat.id, "❌ كلمة السر غير صحيحة")
 
+@bot.callback_query_handler(func=lambda c: c.data == "toggle_auto")
+def toggle_auto(call):
+    global auto_alert_active, auto_alert_stop_time
+    if call.from_user.id not in authorized: return
+    
+    auto_alert_active = not auto_alert_active
+    
+    if auto_alert_active:
+        auto_alert_stop_time = datetime.now() + timedelta(hours=24)
+        bot.answer_callback_query(call.id, "✅ تم تشغيل التنبيه التلقائي لمدة 24 ساعة")
+        bot.send_message(call.message.chat.id, f"🟢 **تم تفعيل التنبيه التلقائي!**\nسيقوم البوت بمراقبة {len(MARKETS)} سوقاً وإرسال تنبيه قبل إغلاق أي شمعة 15m بدقيقة واحدة عند وجود فرصة ذهبية.", parse_mode="Markdown")
+    else:
+        auto_alert_stop_time = None
+        bot.answer_callback_query(call.id, "🛑 تم إيقاف التنبيه التلقائي")
+        bot.send_message(call.message.chat.id, "🔴 **تم إيقاف التنبيه التلقائي.**\nيمكنك الآن إجراء الفحص اليدوي فقط.", parse_mode="Markdown")
+        
+    main_menu(call.message.chat.id)
+
 @bot.callback_query_handler(func=lambda c: c.data=="single")
 def single(call):
     if call.from_user.id not in authorized: return
@@ -143,23 +215,21 @@ def single(call):
 @bot.callback_query_handler(func=lambda c: c.data=="golden")
 def golden(call):
     if call.from_user.id not in authorized: return
-    bot.answer_callback_query(call.id, "⚡ جاري الفحص السريع بالمعالجة المتوازية...")
+    bot.answer_callback_query(call.id, "⚡ جاري الفحص اليدوي المباشر...")
     loading = bot.send_message(call.message.chat.id, f"⚡ جاري فحص {len(MARKETS)} سوق عبر المعالجة المتوازية...")
     
     start_t = time.time()
-    goldens = []
-
-    # استخدام الفحص المتوازي لتسريع العملية لـ 3 ثوانٍ
+    
     with ThreadPoolExecutor(max_workers=10) as executor:
-        results = executor.map(process_single_market, MARKETS.items())
-        goldens = [res for res in results if res is not None]
-
+        results = list(executor.map(process_single_market, MARKETS.items()))
+        
+    goldens = [res for res in results if res is not None]
     elapsed = round(time.time() - start_t, 1)
 
     if not goldens:
         bot.edit_message_text(f"❌ تم فحص {len(MARKETS)} سوق في {elapsed} ثانية.\nلا توجد صفقات عالية الجودة متطابقة حالياً.", call.message.chat.id, loading.message_id)
     else:
-        text = f"🔥🔥 **تم العثور على ({len(goldens)}) فرص قوية ({elapsed} ثانية)** 🔥🔥\n\n" + "\n---\n".join(goldens)
+        text = f"🔥🔥 **نتائج الفحص اليدوي ({len(goldens)} فرصة - {elapsed}ث)** 🔥🔥\n\n" + "\n---\n".join(goldens)
         bot.edit_message_text(text, call.message.chat.id, loading.message_id, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("market_"))
@@ -195,18 +265,20 @@ def choose_time(call):
         emoji = "🟢 CALL (شراء/صعود)" if direction == "BUY" else "🔴 PUT (بيع/هبوط)"
         bot.edit_message_text(f"📊 **{name}**\nالقرار: **{emoji}**\nقوة التوافق: **{percent}%**\n\n{details}", call.message.chat.id, loading.message_id, parse_mode="Markdown")
 
-# تشغيل خادم Flask للحفاظ على عمل البوت 24/7 على الاستضافات المجانية
+# تشغيل خادم Flask
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot status: ACTIVE"
+    return "Bot is active and running!"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
 
+# تشغيل الخيوط الخلفية
 threading.Thread(target=run_flask, daemon=True).start()
+threading.Thread(target=auto_scanner_loop, daemon=True).start()
 
 bot.remove_webhook()
 time.sleep(1)
