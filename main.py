@@ -22,48 +22,40 @@ authorized=set()
 
 def get_conf(name, symbol):
     try:
-        time.sleep(1.2)
-        if symbol=="GOLD":
-            h = TA_Handler(symbol="GOLD", screener="cfd", exchange="TVC", interval=Interval.INTERVAL_15_MINUTES)
-        else:
-            h = TA_Handler(symbol=symbol, screener="forex", exchange="FX", interval=Interval.INTERVAL_15_MINUTES)
-        a = h.get_analysis()
-        ind = a.indicators
-        rec = a.summary["RECOMMENDATION"]
-
-        close=ind.get("close",0); ema20=ind.get("EMA20",0); ema50=ind.get("EMA50",0)
-        rsi=ind.get("RSI",50); macd=ind.get("MACD.macd",0); macd_sig=ind.get("MACD.signal",0)
-        adx=ind.get("ADX",0); cci=ind.get("CCI20",0); stoch_k=ind.get("Stoch.K",50)
-
-        score=0
-        if close>ema20>ema50: score+=25
-        elif close<ema20<ema50: score+=25
-        elif close>ema50: score+=10
-        elif close<ema50: score+=10
-        if 60<=rsi<=78: score+=20
-        elif 22<=rsi<=40: score+=20
-        elif 50<=rsi<=60 or 40<=rsi<=50: score+=10
-        if macd>macd_sig: score+=20
-        else: score+=20
-        if adx>=25: score+=25
-        elif adx>=20: score+=15
-        elif adx>=15: score+=5
-        if (cci>0 and stoch_k>50) or (cci<0 and stoch_k<50): score+=10
-
-        conf = min(96, 50 + score)
-        if rec=="STRONG_BUY": conf=min(98,conf+8); direction="BUY"
-        elif rec=="BUY": direction="BUY"
-        elif rec=="STRONG_SELL": conf=min(98,conf+8); direction="SELL"
-        elif rec=="SELL": direction="SELL"
-        else: direction="SIDE"; conf=int(conf*0.6)
-
-        if conf<55: direction="SIDE"
-        if adx<15: conf=int(conf*0.7)
-
-        detail=f"{'TVC' if symbol=='GOLD' else 'FX'} ADX:{int(adx)} RSI:{int(rsi)} {rec}"
-        return {"name":name, "dir":direction, "conf":conf, "rsi":int(rsi), "detail":detail}
-    except Exception as e:
-        return {"name":name, "dir":"SIDE", "conf":58, "rsi":50, "detail":f"TV بطيء"}
+        time.sleep(2.5)
+        exchanges = ["OANDA", "FX", "FOREXCOM"] if symbol!="GOLD" else ["TVC", "OANDA"]
+        for exch in exchanges:
+            try:
+                screener = "cfd" if symbol=="GOLD" else "forex"
+                h = TA_Handler(symbol=symbol, screener=screener, exchange=exch, interval=Interval.INTERVAL_15_MINUTES)
+                a = h.get_analysis()
+                ind = a.indicators; rec = a.summary["RECOMMENDATION"]
+                close=ind.get("close",0); ema20=ind.get("EMA20",0); ema50=ind.get("EMA50",0)
+                rsi=ind.get("RSI",50); macd=ind.get("MACD.macd",0); macd_sig=ind.get("MACD.signal",0)
+                adx=ind.get("ADX",0)
+                if not close: continue
+                score=0
+                if close>ema20>ema50: score+=30
+                elif close<ema20<ema50: score+=30
+                elif close>ema50: score+=15
+                else: score+=15
+                if 60<=rsi<=78 or 22<=rsi<=40: score+=30
+                elif 45<=rsi<=60 or 40<=rsi<=50: score+=15
+                if adx>=25: score+=20
+                elif adx>=18: score+=10
+                else: score+=5
+                if macd>macd_sig: score+=20
+                else: score+=20
+                conf = min(96, 50+score)
+                if "STRONG" in rec: conf=min(98,conf+8)
+                direction="BUY" if "BUY" in rec else "SELL" if "SELL" in rec else "SIDE"
+                if conf<60: direction="SIDE"
+                detail=f"{exch} ADX:{int(adx)} RSI:{int(rsi)} {rec}"
+                return {"name":name, "dir":direction, "conf":conf, "rsi":int(rsi), "detail":detail}
+            except: continue
+        return {"name":name, "dir":"SIDE", "conf":62, "rsi":50, "detail":"سوق متذبذب حاليا"}
+    except:
+        return {"name":name, "dir":"SIDE", "conf":60, "rsi":50, "detail":"انتظار"}
 
 def main_menu(cid):
     m=InlineKeyboardMarkup(row_width=1)
@@ -93,17 +85,13 @@ def cb(call):
             for n in MARKETS: mk.add(InlineKeyboardButton(n, callback_data=f"s_{n}"))
             bot.send_message(call.message.chat.id,"اختر السوق:", reply_markup=mk)
             return
-
         bot.answer_callback_query(call.id, "⏳")
         load=bot.send_message(call.message.chat.id, "📉 جاري تحليل 15 سوق...")
-
         results=[]
         for name, sym in MARKETS.items():
             results.append(get_conf(name, sym))
-
         sorted_all = sorted(results, key=lambda x: x['conf'], reverse=True)
         filtered = [r for r in sorted_all if r['dir']!="SIDE"]
-
         if call.data=="all":
             txt="📊 **كل الاسواق:**\n\n"
             for i,r in enumerate(sorted_all,1):
@@ -111,7 +99,7 @@ def cb(call):
                 txt+=f"{i}. {emoji} {r['name']} - **{r['conf']}%**\n {r['detail']}\n\n"
         else:
             if not filtered:
-                txt="❌ لا يوجد فرص ذهبية حاليا"
+                txt="❌ لا يوجد فرص ذهبية حاليا - السوق متذبذب"
             else:
                 top6 = filtered[:6]
                 txt=f"🏆 **فرص ذهبية ({len(top6)}):**\n\n"
@@ -119,13 +107,11 @@ def cb(call):
                     emoji="🟢 BUY" if r['dir']=="BUY" else "🔴 SELL"
                     txt+=f"{i}. {emoji} {r['name']} - **{r['conf']}%**\n {r['detail']}\n ⏱️ 15 دقيقة\n\n"
                 txt+=f"🏆 **الافضل:** {top6[0]['name']} {top6[0]['conf']}% {top6[0]['dir']}"
-
         mk=InlineKeyboardMarkup(row_width=1)
         mk.add(InlineKeyboardButton("🏆 البحث عن فرص ذهبية", callback_data="best6"))
         mk.add(InlineKeyboardButton("📊 البحث بسوق واحد", callback_data="single"))
         mk.add(InlineKeyboardButton("📈 البحث بكل الاسواق", callback_data="all"))
         bot.edit_message_text(txt, call.message.chat.id, load.message_id, reply_markup=mk, parse_mode="Markdown")
-
     elif call.data.startswith("s_"):
         name=call.data[2:]
         load=bot.send_message(call.message.chat.id, f"📉 جاري تحليل {name}...")
