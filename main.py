@@ -25,24 +25,62 @@ user_data = {}
 last_request = {}
 authorized = set()
 
-def get_tf_signal(symbol, interval):
-    try:
-        h = TA_Handler(symbol=symbol, screener="forex", exchange="FX", interval=interval)
-        s = h.get_analysis().summary
-        buys, sells = s['BUY'], s['SELL']
-        if buys+sells == 0: return "NEUTRAL", 50
-        direction = "BUY" if buys > sells else "SELL"
-        percent = int((max(buys, sells) / (buys + sells)) * 100)
-        return direction, percent
-    except:
-        return "ERROR", 0
+# --- تم التعديل فقط هنا: إضافة إعادة محاولة وتأخير لتجاوز حظر TradingView ---
+def get_tf_signal(symbol, interval, retries=3):
+    for attempt in range(retries):
+        try:
+            h = TA_Handler(symbol=symbol, screener="forex", exchange="FX", interval=interval)
+            s = h.get_analysis().summary
+            buys, sells = s['BUY'], s['SELL']
+            if buys+sells == 0:
+                return "NEUTRAL", 50
+            direction = "BUY" if buys > sells else "SELL"
+            percent = int((max(buys, sells) / (buys + sells)) * 100)
+            return direction, percent
+        except Exception as e:
+            # محاولة اخيرة فاشلة -> ارجع ERROR
+            if attempt < retries - 1:
+                time.sleep(1.5)  # انتظار قبل إعادة المحاولة لتجاوز الـ rate limit
+                continue
+            else:
+                print(f"TF Error {symbol} {interval}: {e}")
+                return "ERROR", 0
 
 def get_confluence_signal(symbol):
     d5, p5 = get_tf_signal(symbol, Interval.INTERVAL_5_MINUTES)
+    time.sleep(0.6)
     d15, p15 = get_tf_signal(symbol, Interval.INTERVAL_15_MINUTES)
+    time.sleep(0.6)
     d1h, p1h = get_tf_signal(symbol, Interval.INTERVAL_1_HOUR)
 
-    if d5 == d15 == d1h and d5!= "ERROR":
+    # --- تم التعديل فقط هنا: لو فريم واحد ERROR لا تعتبر السوق كله متضارب، اعد المحاولة ---
+    # اذا كلها ERROR فعلاً
+    if d5 == "ERROR" and d15 == "ERROR" and d1h == "ERROR":
+        return "NO_TRADE", 0, f"H1:{p1h}% ERROR | 15m:{p15}% ERROR | 5m:{p5}% ERROR\n\n❌ لا تدخل - فشل الاتصال بـ TradingView، حاول بعد 10 ثواني"
+
+    # اذا فريم واحد فقط ERROR تجاهله واحسب على الباقي
+    signals = []
+    if d5 != "ERROR": signals.append((d5, p5))
+    if d15 != "ERROR": signals.append((d15, p15))
+    if d1h != "ERROR": signals.append((d1h, p1h))
+
+    # لو فشل فريم واحد، نكمل بالموجود
+    if len(signals) < 3:
+        # اذا باقي فريمين متفقين
+        if len(signals) >= 2 and signals[0][0] == signals[1][0]:
+            d5_eff = signals[0][0]
+            avg = int(sum(p for _, p in signals) / len(signals))
+            final = min(94, avg+2)
+            if final >= 75:
+                decision = "✅ دخول جيد - ادخل 1% بحذر (فريم واحد غير متاح)"
+            else:
+                decision = "⚠️ دخول ضعيف - يفضل عدم الدخول"
+            return d5_eff, final, f"H1:{p1h}% {d1h} | 15m:{p15}% {d15} | 5m:{p5}% {d5}\n{decision}"
+        else:
+            return "NO_TRADE", 0, f"H1:{p1h}% {d1h} | 15m:{p15}% {d15} | 5m:{p5}% {d5}\n\n❌ لا تدخل - السوق متضارب"
+
+    # المنطق الأصلي - 3 فريمات متوفرة
+    if d5 == d15 == d1h and d5 != "ERROR":
         if p5 >= 80 and p15 >= 80 and p1h >= 80:
             decision = "🔥🔥 دخول قوي ذهبي - ادخل 2% 🔥🔥"
         elif p5 >= 75 and p15 >= 75 and p1h >= 70:
@@ -98,6 +136,7 @@ def golden(call):
     for name, sym in MARKETS.items():
         try:
             d, p, details = get_confluence_signal(sym)
+            time.sleep(0.8) # <-- إضافة بسيطة لتجنب الحظر عند فحص الكل
             if d!= "NO_TRADE" and p >= 80:
                 emoji = "🟢 BUY" if d=="BUY" else "🔴 SELL"
                 goldens.append(f"{emoji} {name} - {p}%\n{details}\n")
@@ -144,7 +183,11 @@ def choose_time(call):
     else:
         tf_map = {"5": Interval.INTERVAL_5_MINUTES, "15": Interval.INTERVAL_15_MINUTES}
         d, p = get_tf_signal(symbol, tf_map[mode])
-        bot.edit_message_text(f"📊 {name} {mode}m\n{'🟢 BUY' if d=='BUY' else '🔴 SELL'}\n💪 {p}%\n\n{'✅ ادخل' if p>=80 else '❌ لا تدخل'}", call.message.chat.id, loading.message_id)
+        # اذا ERROR اعط رسالة اوضح
+        if d == "ERROR":
+            bot.edit_message_text(f"📊 {name} {mode}m\n❌ فشل الاتصال، حاول مرة ثانية بعد 5 ثواني", call.message.chat.id, loading.message_id)
+        else:
+            bot.edit_message_text(f"📊 {name} {mode}m\n{'🟢 BUY' if d=='BUY' else '🔴 SELL'}\n💪 {p}%\n\n{'✅ ادخل' if p>=80 else '❌ لا تدخل'}", call.message.chat.id, loading.message_id)
 
 app = Flask(__name__)
 @app.route('/')
