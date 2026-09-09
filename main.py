@@ -16,51 +16,48 @@ MARKETS = {
     "🇦🇺/🇨🇦 AUD/CAD": "AUDCAD", "🇪🇺/🇦🇺 EUR/AUD": "EURAUD",
     "🇺🇸/🇨🇭 USD/CHF": "USDCHF", "🇪🇺/🇨🇦 EUR/CAD": "EURCAD",
     "🇦🇺/🇨🇭 AUD/CHF": "AUDCHF", "🇨🇦/🇨🇭 CAD/CHF": "CADCHF",
-    "🥇 GOLD OTC": "GOLD",
+    "🥇 GOLD": "GOLD",
 }
 authorized=set()
 
+def analyze_tf(symbol, interval):
+    try:
+        exch = "TVC" if symbol=="GOLD" else "OANDA"
+        h = TA_Handler(symbol=symbol, screener="cfd" if symbol=="GOLD" else "forex", exchange=exch, interval=interval)
+        a = h.get_analysis()
+        return a.summary["RECOMMENDATION"], a.indicators.get("ADX",0)
+    except:
+        return "NEUTRAL", 0
+
 def get_conf(name, symbol):
     try:
-        time.sleep(1.6)
-        exch = "TVC" if symbol=="GOLD" else "OANDA"
-        h = TA_Handler(symbol=symbol, screener="cfd" if symbol=="GOLD" else "forex", exchange=exch, interval=Interval.INTERVAL_15_MINUTES)
-        a = h.get_analysis()
-        ind = a.indicators; rec = a.summary["RECOMMENDATION"]
-        close=ind.get("close",0); ema20=ind.get("EMA20",0)
-        rsi=ind.get("RSI",50); adx=ind.get("ADX",10)
+        time.sleep(2)
+        r5, adx5 = analyze_tf(symbol, Interval.INTERVAL_5_MINUTES)
+        time.sleep(1)
+        r15, adx15 = analyze_tf(symbol, Interval.INTERVAL_15_MINUTES)
+        time.sleep(1)
+        r1h, adx1h = analyze_tf(symbol, Interval.INTERVAL_1_HOUR)
 
-        if adx < 22:
-            return {"name":name, "dir":"WAIT", "conf":int(55+adx/2), "detail":f"{exch} ADX:{int(adx)} ضعيف"}
+        if ("BUY" in r5 and "BUY" in r15 and "BUY" in r1h):
+            d="BUY"; adx_avg=(adx5+adx15+adx1h)/3
+        elif ("SELL" in r5 and "SELL" in r15 and "SELL" in r1h):
+            d="SELL"; adx_avg=(adx5+adx15+adx1h)/3
+        else:
+            return {"name":name, "dir":"WAIT", "conf":65}
 
-        if rec == "NEUTRAL":
-            return {"name":name, "dir":"WAIT", "conf":62, "detail":f"{exch} ADX:{int(adx)} RSI:{int(rsi)} محايد"}
-
-        if rsi > 78 or rsi < 22:
-            return {"name":name, "dir":"WAIT", "conf":65, "detail":f"{exch} RSI:{int(rsi)} متشبع"}
-
-        ema_dist = abs(close-ema20)/ema20*1000 if ema20 else 0
-        rsi_power = abs(rsi-50)
-        conf = 52 + (adx * 0.9) + (rsi_power * 0.7) + ema_dist*1.5
-        if "STRONG" in rec: conf += 8
-        else: conf += 3
-        conf = int(max(60, min(94, conf)))
-
-        if conf < 86:
-            return {"name":name, "dir":"WAIT", "conf":conf, "detail":f"{exch} ADX:{int(adx)} RSI:{int(rsi)} {rec} - ضعيف"}
-
-        direction = "BUY" if "BUY" in rec else "SELL"
-        return {"name":name, "dir":direction, "conf":conf, "detail":f"{exch} ADX:{int(adx)} RSI:{int(rsi)} {rec} ✅"}
-
+        if adx_avg < 22: return {"name":name, "dir":"WAIT", "conf":70}
+        conf = 86 + int(adx_avg/4) + (2 if "STRONG" in r15 else 0)
+        conf = min(94, conf)
+        return {"name":name, "dir":d, "conf":conf}
     except:
-        return {"name":name, "dir":"WAIT", "conf":60, "detail":"سوق متذبذب حاليا"}
+        return {"name":name, "dir":"WAIT", "conf":60}
 
 def main_menu(cid):
     m=InlineKeyboardMarkup(row_width=1)
-    m.add(InlineKeyboardButton("🏆 فرص 86%+ فقط", callback_data="best6"))
+    m.add(InlineKeyboardButton("🏆 فرص 86%+ 3 فريمات", callback_data="best6"))
     m.add(InlineKeyboardButton("📊 سوق واحد", callback_data="single"))
     m.add(InlineKeyboardButton("📈 كل الاسواق", callback_data="all"))
-    bot.send_message(cid,"🏆 MAD-BOT 86%+ موثوق", reply_markup=m)
+    bot.send_message(cid,"🏆 MAD-BOT 3 فريمات", reply_markup=m)
 
 @bot.message_handler(commands=['start'])
 def start(msg):
@@ -83,50 +80,48 @@ def cb(call):
             for n in MARKETS: mk.add(InlineKeyboardButton(n, callback_data=f"s_{n}"))
             bot.send_message(call.message.chat.id,"اختر:", reply_markup=mk); return
         bot.answer_callback_query(call.id,"⏳")
-        load=bot.send_message(call.message.chat.id,"📉 افحص فرص 86%+...")
+        load=bot.send_message(call.message.chat.id,"⏳ افحص 3 فريمات...")
         results=[get_conf(n,s) for n,s in MARKETS.items()]
-        sorted_all=sorted(results, key=lambda x: x['conf'], reverse=True)
-        trusted=[r for r in sorted_all if r['conf']>=86 and r['dir']!="WAIT"]
+        results=sorted(results, key=lambda x: x['conf'], reverse=True)
+        trusted=[r for r in results if r['dir']!="WAIT"]
 
         if call.data=="all":
-            txt="📊 **كل الاسواق:**\n\n"
-            for i,r in enumerate(sorted_all,1):
-                if r['dir']=="BUY": emoji="🟢 شراء"
-                elif r['dir']=="SELL": emoji="🔴 بيع"
-                else: emoji="⏸️ لا تدخل - متذبذب"
-                txt+=f"{i}. {emoji} {r['name']} - **{r['conf']}%**\n {r['detail']}\n\n"
+            txt="📊 كل الاسواق:\n\n"
+            for i,r in enumerate(results,1):
+                if r['dir']=="BUY": txt+=f"{i}. 🟢 {r['name']} - {r['conf']}% شراء\n"
+                elif r['dir']=="SELL": txt+=f"{i}. 🔴 {r['name']} - {r['conf']}% بيع\n"
+                else: txt+=f"{i}. {r['name']} - {r['conf']}% لا تدخل\n"
         else:
-            if not trusted:
-                txt="❌ **لا يوجد فرص 86%+ حاليا**\n\nكل الاسواق ⏸️ لا تدخل - متذبذبة\nانتظر 10 دقايق"
+            if not trusted: txt="❌ مافي توافق 3 فريمات الحين"
             else:
-                txt=f"🏆 **فرص موثوقة 86%+ ({len(trusted)}):**\n\n"
+                txt="🏆 فرص 86%+:\n\n"
                 for i,r in enumerate(trusted[:6],1):
-                    emoji="🟢 شراء" if r['dir']=="BUY" else "🔴 بيع"
-                    txt+=f"{i}. {emoji} {r['name']} - **{r['conf']}%**\n {r['detail']}\n\n"
+                    e="🟢" if r['dir']=="BUY" else "🔴"
+                    t="شراء" if r['dir']=="BUY" else "بيع"
+                    txt+=f"{i}. {e} {r['name']} - {r['conf']}% {t}\n"
 
         mk=InlineKeyboardMarkup(row_width=1)
-        mk.add(InlineKeyboardButton("🏆 فرص 86%+ فقط", callback_data="best6"))
+        mk.add(InlineKeyboardButton("🏆 فرص 3 فريمات", callback_data="best6"))
         mk.add(InlineKeyboardButton("📊 سوق واحد", callback_data="single"))
         mk.add(InlineKeyboardButton("📈 كل الاسواق", callback_data="all"))
-        bot.edit_message_text(txt, call.message.chat.id, load.message_id, reply_markup=mk, parse_mode="Markdown")
+        bot.edit_message_text(txt, call.message.chat.id, load.message_id, reply_markup=mk)
+
     elif call.data.startswith("s_"):
         name=call.data[2:]
-        load=bot.send_message(call.message.chat.id, f"📉 {name}...")
+        load=bot.send_message(call.message.chat.id,f"⏳ {name}...")
         r=get_conf(name, MARKETS[name])
-        if r['dir']=="BUY": emoji="🟢 شراء"
-        elif r['dir']=="SELL": emoji="🔴 بيع"
-        else: emoji="⏸️ لا تدخل - متذبذب"
-        txt=f"{emoji} {r['name']} - **{r['conf']}%**\n{r['detail']}"
-        if r['conf']<86: txt+="\n\n⚠️ اقل من 86% - لا تدخل"
+        if r['dir']=="BUY": txt=f"🟢 {r['name']} - {r['conf']}% شراء"
+        elif r['dir']=="SELL": txt=f"🔴 {r['name']} - {r['conf']}% بيع"
+        else: txt=f"{r['name']} - {r['conf']}% لا تدخل"
         mk=InlineKeyboardMarkup(row_width=1)
-        mk.add(InlineKeyboardButton("🏆 فرص 86%+ فقط", callback_data="best6"))
+        mk.add(InlineKeyboardButton("🏆 فرص 3 فريمات", callback_data="best6"))
         mk.add(InlineKeyboardButton("📊 سوق واحد", callback_data="single"))
         mk.add(InlineKeyboardButton("📈 كل الاسواق", callback_data="all"))
-        bot.edit_message_text(txt, call.message.chat.id, load.message_id, reply_markup=mk, parse_mode="Markdown")
+        bot.edit_message_text(txt, call.message.chat.id, load.message_id, reply_markup=mk)
 
 app=Flask(__name__)
 @app.route('/')
-def h(): return "MAD-BOT 86%"
+def h(): return "MAD 3TF"
 def run(): app.run(host="0.0.0.0", port=int(os.environ.get("PORT",10000)))
 threading.Thread(target=run, daemon=True).start()
 bot.remove_webhook(); time.sleep(2)
