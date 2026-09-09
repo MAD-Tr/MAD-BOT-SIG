@@ -22,52 +22,50 @@ authorized=set()
 
 def get_conf(name, symbol):
     try:
-        time.sleep(2.5)
-        exchanges = ["OANDA", "FX", "FOREXCOM"] if symbol!="GOLD" else ["TVC", "OANDA"]
-        for exch in exchanges:
-            try:
-                screener = "cfd" if symbol=="GOLD" else "forex"
-                h = TA_Handler(symbol=symbol, screener=screener, exchange=exch, interval=Interval.INTERVAL_15_MINUTES)
-                a = h.get_analysis()
-                ind = a.indicators; rec = a.summary["RECOMMENDATION"]
-                close=ind.get("close",0); ema20=ind.get("EMA20",0); ema50=ind.get("EMA50",0)
-                rsi=ind.get("RSI",50); macd=ind.get("MACD.macd",0); macd_sig=ind.get("MACD.signal",0)
-                adx=ind.get("ADX",0)
-                if not close: continue
-                score=0
-                if close>ema20>ema50: score+=30
-                elif close<ema20<ema50: score+=30
-                elif close>ema50: score+=15
-                else: score+=15
-                if 60<=rsi<=78 or 22<=rsi<=40: score+=30
-                elif 45<=rsi<=60 or 40<=rsi<=50: score+=15
-                if adx>=25: score+=20
-                elif adx>=18: score+=10
-                else: score+=5
-                if macd>macd_sig: score+=20
-                else: score+=20
-                conf = min(96, 50+score)
-                if "STRONG" in rec: conf=min(98,conf+8)
-                direction="BUY" if "BUY" in rec else "SELL" if "SELL" in rec else "SIDE"
-                if conf<60: direction="SIDE"
-                detail=f"{exch} ADX:{int(adx)} RSI:{int(rsi)} {rec}"
-                return {"name":name, "dir":direction, "conf":conf, "rsi":int(rsi), "detail":detail}
-            except: continue
-        return {"name":name, "dir":"SIDE", "conf":62, "rsi":50, "detail":"سوق متذبذب حاليا"}
+        time.sleep(1.6)
+        exch = "TVC" if symbol=="GOLD" else "OANDA"
+        h = TA_Handler(symbol=symbol, screener="cfd" if symbol=="GOLD" else "forex", exchange=exch, interval=Interval.INTERVAL_15_MINUTES)
+        a = h.get_analysis()
+        ind = a.indicators; rec = a.summary["RECOMMENDATION"]
+        close=ind.get("close",0); ema20=ind.get("EMA20",0)
+        rsi=ind.get("RSI",50); adx=ind.get("ADX",10)
+
+        if adx < 22:
+            return {"name":name, "dir":"WAIT", "conf":int(55+adx/2), "detail":f"{exch} ADX:{int(adx)} ضعيف"}
+
+        if rec == "NEUTRAL":
+            return {"name":name, "dir":"WAIT", "conf":62, "detail":f"{exch} ADX:{int(adx)} RSI:{int(rsi)} محايد"}
+
+        if rsi > 78 or rsi < 22:
+            return {"name":name, "dir":"WAIT", "conf":65, "detail":f"{exch} RSI:{int(rsi)} متشبع"}
+
+        ema_dist = abs(close-ema20)/ema20*1000 if ema20 else 0
+        rsi_power = abs(rsi-50)
+        conf = 52 + (adx * 0.9) + (rsi_power * 0.7) + ema_dist*1.5
+        if "STRONG" in rec: conf += 8
+        else: conf += 3
+        conf = int(max(60, min(94, conf)))
+
+        if conf < 86:
+            return {"name":name, "dir":"WAIT", "conf":conf, "detail":f"{exch} ADX:{int(adx)} RSI:{int(rsi)} {rec} - ضعيف"}
+
+        direction = "BUY" if "BUY" in rec else "SELL"
+        return {"name":name, "dir":direction, "conf":conf, "detail":f"{exch} ADX:{int(adx)} RSI:{int(rsi)} {rec} ✅"}
+
     except:
-        return {"name":name, "dir":"SIDE", "conf":60, "rsi":50, "detail":"انتظار"}
+        return {"name":name, "dir":"WAIT", "conf":60, "detail":"سوق متذبذب حاليا"}
 
 def main_menu(cid):
     m=InlineKeyboardMarkup(row_width=1)
-    m.add(InlineKeyboardButton("🏆 البحث عن فرص ذهبية", callback_data="best6"))
-    m.add(InlineKeyboardButton("📊 البحث بسوق واحد", callback_data="single"))
-    m.add(InlineKeyboardButton("📈 البحث بكل الاسواق", callback_data="all"))
-    bot.send_message(cid,"🏆 MAD-BOT V3 - 14", reply_markup=m)
+    m.add(InlineKeyboardButton("🏆 فرص 86%+ فقط", callback_data="best6"))
+    m.add(InlineKeyboardButton("📊 سوق واحد", callback_data="single"))
+    m.add(InlineKeyboardButton("📈 كل الاسواق", callback_data="all"))
+    bot.send_message(cid,"🏆 MAD-BOT 86%+ موثوق", reply_markup=m)
 
 @bot.message_handler(commands=['start'])
 def start(msg):
     if msg.from_user.id not in authorized:
-        bot.send_message(msg.chat.id,"🔒 ارسل كلمة السر:"); return
+        bot.send_message(msg.chat.id,"🔒 كلمة السر:"); return
     main_menu(msg.chat.id)
 
 @bot.message_handler(func=lambda m: m.from_user.id not in authorized)
@@ -83,50 +81,52 @@ def cb(call):
         if call.data=="single":
             mk=InlineKeyboardMarkup(row_width=2)
             for n in MARKETS: mk.add(InlineKeyboardButton(n, callback_data=f"s_{n}"))
-            bot.send_message(call.message.chat.id,"اختر السوق:", reply_markup=mk)
-            return
-        bot.answer_callback_query(call.id, "⏳")
-        load=bot.send_message(call.message.chat.id, "📉 جاري تحليل 15 سوق...")
-        results=[]
-        for name, sym in MARKETS.items():
-            results.append(get_conf(name, sym))
-        sorted_all = sorted(results, key=lambda x: x['conf'], reverse=True)
-        filtered = [r for r in sorted_all if r['dir']!="SIDE"]
+            bot.send_message(call.message.chat.id,"اختر:", reply_markup=mk); return
+        bot.answer_callback_query(call.id,"⏳")
+        load=bot.send_message(call.message.chat.id,"📉 افحص فرص 86%+...")
+        results=[get_conf(n,s) for n,s in MARKETS.items()]
+        sorted_all=sorted(results, key=lambda x: x['conf'], reverse=True)
+        trusted=[r for r in sorted_all if r['conf']>=86 and r['dir']!="WAIT"]
+
         if call.data=="all":
             txt="📊 **كل الاسواق:**\n\n"
             for i,r in enumerate(sorted_all,1):
-                emoji="🟢 BUY" if r['dir']=="BUY" else "🔴 SELL" if r['dir']=="SELL" else "⚪ SIDE"
+                if r['dir']=="BUY": emoji="🟢 شراء"
+                elif r['dir']=="SELL": emoji="🔴 بيع"
+                else: emoji="⏸️ لا تدخل - متذبذب"
                 txt+=f"{i}. {emoji} {r['name']} - **{r['conf']}%**\n {r['detail']}\n\n"
         else:
-            if not filtered:
-                txt="❌ لا يوجد فرص ذهبية حاليا - السوق متذبذب"
+            if not trusted:
+                txt="❌ **لا يوجد فرص 86%+ حاليا**\n\nكل الاسواق ⏸️ لا تدخل - متذبذبة\nانتظر 10 دقايق"
             else:
-                top6 = filtered[:6]
-                txt=f"🏆 **فرص ذهبية ({len(top6)}):**\n\n"
-                for i,r in enumerate(top6,1):
-                    emoji="🟢 BUY" if r['dir']=="BUY" else "🔴 SELL"
-                    txt+=f"{i}. {emoji} {r['name']} - **{r['conf']}%**\n {r['detail']}\n ⏱️ 15 دقيقة\n\n"
-                txt+=f"🏆 **الافضل:** {top6[0]['name']} {top6[0]['conf']}% {top6[0]['dir']}"
+                txt=f"🏆 **فرص موثوقة 86%+ ({len(trusted)}):**\n\n"
+                for i,r in enumerate(trusted[:6],1):
+                    emoji="🟢 شراء" if r['dir']=="BUY" else "🔴 بيع"
+                    txt+=f"{i}. {emoji} {r['name']} - **{r['conf']}%**\n {r['detail']}\n\n"
+
         mk=InlineKeyboardMarkup(row_width=1)
-        mk.add(InlineKeyboardButton("🏆 البحث عن فرص ذهبية", callback_data="best6"))
-        mk.add(InlineKeyboardButton("📊 البحث بسوق واحد", callback_data="single"))
-        mk.add(InlineKeyboardButton("📈 البحث بكل الاسواق", callback_data="all"))
+        mk.add(InlineKeyboardButton("🏆 فرص 86%+ فقط", callback_data="best6"))
+        mk.add(InlineKeyboardButton("📊 سوق واحد", callback_data="single"))
+        mk.add(InlineKeyboardButton("📈 كل الاسواق", callback_data="all"))
         bot.edit_message_text(txt, call.message.chat.id, load.message_id, reply_markup=mk, parse_mode="Markdown")
     elif call.data.startswith("s_"):
         name=call.data[2:]
-        load=bot.send_message(call.message.chat.id, f"📉 جاري تحليل {name}...")
+        load=bot.send_message(call.message.chat.id, f"📉 {name}...")
         r=get_conf(name, MARKETS[name])
-        emoji="🟢 BUY" if r['dir']=="BUY" else "🔴 SELL" if r['dir']=="SELL" else "⚪ SIDE"
+        if r['dir']=="BUY": emoji="🟢 شراء"
+        elif r['dir']=="SELL": emoji="🔴 بيع"
+        else: emoji="⏸️ لا تدخل - متذبذب"
         txt=f"{emoji} {r['name']} - **{r['conf']}%**\n{r['detail']}"
+        if r['conf']<86: txt+="\n\n⚠️ اقل من 86% - لا تدخل"
         mk=InlineKeyboardMarkup(row_width=1)
-        mk.add(InlineKeyboardButton("🏆 البحث عن فرص ذهبية", callback_data="best6"))
-        mk.add(InlineKeyboardButton("📊 البحث بسوق واحد", callback_data="single"))
-        mk.add(InlineKeyboardButton("📈 البحث بكل الاسواق", callback_data="all"))
+        mk.add(InlineKeyboardButton("🏆 فرص 86%+ فقط", callback_data="best6"))
+        mk.add(InlineKeyboardButton("📊 سوق واحد", callback_data="single"))
+        mk.add(InlineKeyboardButton("📈 كل الاسواق", callback_data="all"))
         bot.edit_message_text(txt, call.message.chat.id, load.message_id, reply_markup=mk, parse_mode="Markdown")
 
 app=Flask(__name__)
 @app.route('/')
-def h(): return "MAD-BOT V3-14"
+def h(): return "MAD-BOT 86%"
 def run(): app.run(host="0.0.0.0", port=int(os.environ.get("PORT",10000)))
 threading.Thread(target=run, daemon=True).start()
 bot.remove_webhook(); time.sleep(2)
