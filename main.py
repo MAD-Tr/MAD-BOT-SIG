@@ -44,16 +44,16 @@ def pro_check(sym, ex):
         bb_up=ind.get("BB.upper",0)
         bb_low=ind.get("BB.lower",0)
         close=ind.get("close",0)
-        if adx < 28: return 0,"WAIT"
-        if rsi > 72 or rsi < 28: return 0,"WAIT"
-        if close > bb_up*0.998 or close < bb_low*1.002: return 0,"WAIT"
+        if adx < 25: return 0,"WAIT"
+        if rsi > 75 or rsi < 25: return 0,"WAIT"
+        if close > bb_up*0.999 or close < bb_low*1.001: return 0,"WAIT"
         up = ema20 > ema50 and close > ema20 and macd > macd_sig
         down = ema20 < ema50 and close < ema20 and macd < macd_sig
-        if up and "BUY" in rec and 35<rsi<67:
-            conf = min(95, 88 + int((adx-28)//2))
+        if up and "BUY" in rec and 30<rsi<70:
+            conf = min(95, 82 + int((adx-25)//2))
             return conf,"BUY"
-        if down and "SELL" in rec and 33<rsi<65:
-            conf = min(95, 88 + int((adx-28)//2))
+        if down and "SELL" in rec and 30<rsi<70:
+            conf = min(95, 82 + int((adx-25)//2))
             return conf,"SELL"
     except: pass
     return 0,"WAIT"
@@ -67,8 +67,12 @@ def multi_pro(sym):
     buys=sum(1 for _,d in res if d=="BUY")
     sells=sum(1 for _,d in res if d=="SELL")
     avg=sum(c for c,_ in res)//3 if res else 0
-    if buys==3 and avg>=90: return avg,"BUY"
-    if sells==3 and avg>=90: return avg,"SELL"
+    if buys==3 and avg>=88: return avg,"BUY"
+    if sells==3 and avg>=88: return avg,"SELL"
+    if buys>=2 and avg>=85: return avg,"BUY"
+    if sells>=2 and avg>=85: return avg,"SELL"
+    for c,d in res:
+        if c>=90 and d!="WAIT": return c,d
     return 0,"WAIT"
 
 def jeddah_time():
@@ -91,30 +95,30 @@ def scanner():
                     alert_real[cid]=False; continue
                 for name,sym in MARKETS_REAL.items():
                     c,d=multi_pro(sym)
-                    if c>=90 and d!="WAIT":
+                    if c>=85 and d!="WAIT":
                         e="🟢 صعود" if d=="BUY" else "🔴 هبوط"
                         t=jeddah_time()
                         mk=InlineKeyboardMarkup(row_width=2)
                         mk.add(InlineKeyboardButton("✅ ربح", callback_data=f"win_{cid}"),
                                InlineKeyboardButton("❌ خسارة", callback_data=f"lose_{cid}"))
                         bot.send_message(cid,f"🔔 {name}\n{e} {c}%\n{t} ⏰", reply_markup=mk)
-                        time.sleep(400); break
+                        time.sleep(300); break
                     time.sleep(0.8)
             for cid,on in list(alert_otc.items()):
                 if not on: continue
                 if cid in blocked and datetime.now()<blocked[cid]: continue
                 for name,sym in MARKETS_OTC.items():
                     c,d=multi_pro(sym)
-                    if c>=90 and d!="WAIT":
+                    if c>=85 and d!="WAIT":
                         e="🟢 صعود" if d=="BUY" else "🔴 هبوط"
                         t=jeddah_time()
                         mk=InlineKeyboardMarkup(row_width=2)
                         mk.add(InlineKeyboardButton("✅ ربح", callback_data=f"win_{cid}"),
                                InlineKeyboardButton("❌ خسارة", callback_data=f"lose_{cid}"))
                         bot.send_message(cid,f"🔔 {name}\n{e} {c}%\n{t} ⏰", reply_markup=mk)
-                        time.sleep(400); break
+                        time.sleep(300); break
                     time.sleep(0.8)
-            time.sleep(50)
+            time.sleep(40)
         except:
             time.sleep(10)
 
@@ -210,18 +214,18 @@ def cb(call):
         for n,s in MARKETS_REAL.items():
             c,di=multi_pro(s)
             if not best or c>best[0]: best=(c,di,n)
-        if best and best[0]>=90:
+        if best and best[0]>=85:
             e="🟢 صعود" if best[1]=="BUY" else "🔴 هبوط"
             t=jeddah_time()
             bot.send_message(cid,f"{best[2]}\n{e} {best[0]}%\n{t} ⏰", reply_markup=kb_real(cid))
-        else: bot.send_message(cid,"⚪ انتظار", reply_markup=kb_real(cid))
+        else: bot.send_message(cid,"⚪ انتظار - السوق متذبذب", reply_markup=kb_real(cid))
     elif d=="gold_otc":
         bot.send_message(cid,"⏳ جاري الفحص...")
         best=None
         for n,s in MARKETS_OTC.items():
             c,di=multi_pro(s)
             if not best or c>best[0]: best=(c,di,n)
-        if best and best[0]>=90:
+        if best and best[0]>=85:
             e="🟢 صعود" if best[1]=="BUY" else "🔴 هبوط"
             t=jeddah_time()
             bot.send_message(cid,f"{best[2]}\n{e} {best[0]}%\n{t} ⏰", reply_markup=kb_otc(cid))
@@ -241,13 +245,13 @@ def cb(call):
         c,di=multi_pro(MARKETS_REAL[name])
         e="🟢 صعود" if di=="BUY" else "🔴 هبوط" if di=="SELL" else "⚪ انتظار"
         t=jeddah_time()
-        bot.send_message(cid,f"{name}\n{e} {c}%\n{t} ⏰" if c>=90 else f"{name}\n{e}", reply_markup=kb_real(cid))
+        bot.send_message(cid,f"{name}\n{e} {c}%\n{t} ⏰" if c>=85 else f"{name}\n{e} - متذبذب", reply_markup=kb_real(cid))
     elif d.startswith("chkO_"):
         name=d.replace("chkO_","")
         c,di=multi_pro(MARKETS_OTC[name])
         e="🟢 صعود" if di=="BUY" else "🔴 هبوط" if di=="SELL" else "⚪ انتظار"
         t=jeddah_time()
-        bot.send_message(cid,f"{name}\n{e} {c}%\n{t} ⏰" if c>=90 else f"{name}\n{e}", reply_markup=kb_otc(cid))
+        bot.send_message(cid,f"{name}\n{e} {c}%\n{t} ⏰" if c>=85 else f"{name}\n{e}", reply_markup=kb_otc(cid))
 
 app=Flask(__name__)
 @app.route('/')
