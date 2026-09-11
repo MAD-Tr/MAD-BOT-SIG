@@ -136,7 +136,7 @@ def check_pass(m):
 def cb(call):
     cid=call.message.chat.id; d=call.data
     if cid not in allowed or not allowed[cid]: return
-    if d=="mode_real": bot.send_message(cid,"النظام الذكي\nاختر:", reply_markup=kb_real(cid))
+    if d=="mode_real": bot.send_message(cid,"⬇️⬇️⬇️", reply_markup=kb_real(cid))
     elif d=="back_start": bot.send_message(cid,"تم تشغيل البوت ✅", reply_markup=kb_start())
     elif d=="blocked":
         r=int((blocked[cid]-datetime.now()).total_seconds()//60)
