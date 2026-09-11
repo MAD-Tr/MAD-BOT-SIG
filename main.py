@@ -43,37 +43,33 @@ def get_confluence_signal(symbol):
     d1h, p1h = get_tf_signal(symbol, Interval.INTERVAL_1_HOUR)
 
     if d5 == d15 == d1h and d5!= "ERROR":
-        # ثقة حقيقية مو وهمية - وتجيب اشارات
         base = int(p5*0.30 + p15*0.35 + p1h*0.35)
         diff = max(p5, p15, p1h) - min(p5, p15, p1h)
-        if diff > 20:
-            base -= 8
-        elif diff > 12:
-            base -= 4
-        if base > 92:
-            base = 92
-        if base < 0:
-            base = 0
+        if diff > 20: base -= 8
+        elif diff > 12: base -= 4
+        if min(p5, p15, p1h) < 65: base -= 8
+        if base > 92: base = 92
+        if base < 0: base = 0
         final = base
 
-        if p5 >= 75 and p15 >= 75 and p1h >= 75:
-            decision = "🔥🔥 ممتاز - ادخل 2% 🔥🔥"
-        elif p5 >= 70 and p15 >= 70 and p1h >= 65:
+        if final >= 85:
+            decision = "🔥🔥 ممتاز جدا - TOP ادخل 2% 🔥🔥"
+        elif final >= 78:
+            decision = "✅ ممتاز - ادخل 1.5%"
+        elif final >= 70:
             decision = "✅ جيد - ادخل 1%"
-        elif p5 >= 60 and p15 >= 60 and p1h >= 60:
-            decision = "⚠️ متوسط"
         else:
-            decision = "❌ ضعيف"
+            decision = "⚠️ متوسط - لا تدخل"
 
         return d5, final, f"H1:{p1h}% | 15m:{p15}% | 5m:{p5}%\n{decision}"
 
-    return "NO_TRADE", 0, f"H1:{p1h}% {d1h} | 15m:{p15}% {d15} | 5m:{p5}% {d5}\n\n❌ لا تدخل - السوق متضارب"
+    return "NO_TRADE", 0, f"H1:{p1h}% {d1h} | 15m:{p15}% {d15} | 5m:{p5}% {d5}\n\n❌ متضارب"
 
 def main_menu(chat_id):
     markup = InlineKeyboardMarkup(row_width=1)
     markup.add(InlineKeyboardButton("🔥 البحث عن الفرصة الذهبية (22 سوق)", callback_data="golden"))
     markup.add(InlineKeyboardButton("📊 فحص سوق واحد", callback_data="single"))
-    bot.send_message(chat_id, "👋 بوت احترافي Triple TF\nاختر:", reply_markup=markup)
+    bot.send_message(chat_id, "💰 بوت احترافي اختار", reply_markup=markup)
 
 @bot.message_handler(commands=['start'])
 def start(msg):
@@ -112,13 +108,21 @@ def golden(call):
             d, p, details = get_confluence_signal(sym)
             if d!= "NO_TRADE" and p >= 70:
                 emoji = "🟢 BUY" if d=="BUY" else "🔴 SELL"
-                goldens.append(f"{emoji} {name} - {p}%\n{details}\n")
+                goldens.append((p, f"{emoji} {name} - {p}%\n{details}\n"))
         except: continue
+
+    goldens.sort(key=lambda x: x[0], reverse=True)
     elapsed = round(time.time() - start_t, 1)
     if not goldens:
-        bot.edit_message_text(f"❌ فحصت {len(MARKETS)} سوق في {elapsed}ث - لا يوجد ذهبي نظيف\nجرب بعد 5 دقايق", call.message.chat.id, loading.message_id)
+        bot.edit_message_text(f"❌ فحصت {len(MARKETS)} سوق في {elapsed}ث - لا يوجد موثوق حاليا\nجرب بعد 5 دقايق", call.message.chat.id, loading.message_id)
     else:
-        text = f"🔥🔥 {len(goldens)} فرص من {len(MARKETS)} سوق في {elapsed}ث 🔥🔥\n\n" + "\n".join(goldens)
+        best = goldens[0]
+        text = f"🏆 أفضل صفقة موثوقة {best[0]}% 🏆\n{best[1]}\n"
+        text += f"━━━━━━━━━━━━\n🔥🔥 {len(goldens)} فرص مرتبة حسب الثقة في {elapsed}ث 🔥🔥\n\n"
+        for i, (p, detail) in enumerate(goldens, 1):
+            crown = "👑" if i==1 else f"{i}."
+            text += f"{crown} {detail}\n"
+        text += f"\n💡 نصيحة: ادخل رقم 1 فقط - أعلى ثقة"
         bot.edit_message_text(text, call.message.chat.id, loading.message_id)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("market_"))
