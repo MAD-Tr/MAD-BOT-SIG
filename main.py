@@ -67,8 +67,8 @@ def strong_ai(symbol):
         elif bias=="SELL" and "SELL" in rec5 and "SELL" in rec15 and "STRONG_SELL" in rec5: score-=15
         else: return 0,"WAIT","مو STRONG"
         if abs(close-open_)*10000 < 3: return 0,"WAIT","شمعة ضعيفة"
-        if score>=88: return 94,"BUY","وحش 90%"
-        elif score<=12: return 94,"SELL","وحش 90%"
+        if score>=88: return 94,"BUY","ثقة عالية 90%"
+        elif score<=12: return 94,"SELL","ثقة عالية 90%"
         else: return 0,"WAIT",""
     except: return 0,"WAIT","خطأ"
 
@@ -80,7 +80,7 @@ def scanner():
                 if cid in blocked and datetime.now()<blocked[cid]: continue
                 if cid in blocked and datetime.now()>=blocked[cid]:
                     del blocked[cid]; loss_streak[cid]=0
-                    bot.send_message(cid,"✅ انتهى الحظر 30د - رجع الوحش")
+                    bot.send_message(cid,"✅ انتهى الحظر 30د - النظام رجع")
                     alert_real[cid]=False; continue
                 if not is_open(): bot.send_message(cid,"⏸️ السوق مقفل"); alert_real[cid]=False; continue
                 for name,sym in MARKETS_REAL.items():
@@ -90,7 +90,7 @@ def scanner():
                         t,_ = jeddah_time()
                         mk=InlineKeyboardMarkup(row_width=2)
                         mk.add(InlineKeyboardButton("✅ ربح", callback_data=f"win_{cid}"), InlineKeyboardButton("❌ خسارة", callback_data=f"lose_{cid}"))
-                        bot.send_message(cid,f"💪🏻 الوحش 90%+\n🔔 {name}\n{e} {c}%\n📊 {p}\n⏱️ 15 دقيقة\n{t} ⏰", reply_markup=mk)
+                        bot.send_message(cid,f"🎯 إشارة مؤكدة 90%+\n🔔 {name}\n{e} {c}%\n📊 {p}\n⏱️ 15 دقيقة\n{t} ⏰", reply_markup=mk)
                         time.sleep(600); break
                     time.sleep(1.5)
             time.sleep(60)
@@ -98,7 +98,7 @@ def scanner():
 
 def kb_start():
     mk=InlineKeyboardMarkup(row_width=1)
-    mk.add(InlineKeyboardButton("💪🏻 بوت الوحش 90%", callback_data="mode_real"))
+    mk.add(InlineKeyboardButton("🎯 النظام الذكي PRO", callback_data="mode_real"))
     return mk
 
 def kb_real(cid):
@@ -107,9 +107,10 @@ def kb_real(cid):
         r=int((blocked[cid]-datetime.now()).total_seconds()//60)
         mk.add(InlineKeyboardButton(f"🛑 محظور {r} د", callback_data="blocked"))
     else:
-        txt="⏸️ اطفاء" if alert_real.get(cid,False) else "▶️ تشغيل الوحش 24س"
+        txt="⏸️ إيقاف التنبيه" if alert_real.get(cid,False) else "▶️ تشغيل التنبيه التلقائي"
         mk.add(InlineKeyboardButton(txt, callback_data="toggle_real"))
-    mk.add(InlineKeyboardButton("💎 فرصة وحش", callback_data="gold_real"))
+    mk.add(InlineKeyboardButton("⚡ فحص فوري الآن", callback_data="gold_real"))
+    mk.add(InlineKeyboardButton("🔍 فحص كل الأسواق", callback_data="scan_all"))
     mk.add(InlineKeyboardButton("⬅️ رجوع", callback_data="back_start"))
     return mk
 
@@ -117,7 +118,7 @@ def kb_real(cid):
 def start(m):
     cid=m.chat.id
     if cid in allowed and allowed[cid]:
-        bot.send_message(cid,"💪🏻 جاهز - وقف 30د", reply_markup=kb_start())
+        bot.send_message(cid,"🎯 النظام جاهز\n🛡️ حماية تلقائية 30 دقيقة", reply_markup=kb_start())
     else:
         msg=bot.send_message(cid,"🔒 الرقم السري:")
         bot.register_next_step_handler(msg, lambda x: check_pass(x))
@@ -126,16 +127,16 @@ def check_pass(m):
     cid=m.chat.id
     if m.text==PASSWORD:
         allowed[cid]=True
-        bot.send_message(cid,"✅ حياك", reply_markup=kb_start())
+        bot.send_message(cid,"✅ تم التفعيل - حياك", reply_markup=kb_start())
     else:
-        msg=bot.send_message(cid,"❌ غلط:")
+        msg=bot.send_message(cid,"❌ رمز خاطئ:")
         bot.register_next_step_handler(msg, lambda x: check_pass(x))
 
 @bot.callback_query_handler(func=lambda c: True)
 def cb(call):
     cid=call.message.chat.id; d=call.data
     if cid not in allowed or not allowed[cid]: return
-    if d=="mode_real": bot.send_message(cid,"💪🏻 الوحش - 90% - وقف 30د", reply_markup=kb_real(cid))
+    if d=="mode_real": bot.send_message(cid,"🛡️ الحماية الذكية - دقة عالية\n8 فلاتر + ساعات ذهبية", reply_markup=kb_real(cid))
     elif d=="back_start": bot.send_message(cid,"اختر:", reply_markup=kb_start())
     elif d=="blocked":
         r=int((blocked[cid]-datetime.now()).total_seconds()//60)
@@ -143,22 +144,22 @@ def cb(call):
     elif d=="toggle_real":
         if cid in blocked and datetime.now()<blocked[cid]: return
         alert_real[cid]=not alert_real.get(cid,False)
-        bot.send_message(cid,"✅ شغال" if alert_real[cid] else "⏸️ وقف", reply_markup=kb_real(cid))
+        bot.send_message(cid,"✅ التنبيه شغال 24س" if alert_real[cid] else "⏸️ تم الإيقاف", reply_markup=kb_real(cid))
     elif d.startswith("win_"):
         loss_streak[cid]=0
         history[cid]=history.get(cid,[])+[1]
-        bot.send_message(cid,f"💪🏻 {sum(history[cid])}/{len(history[cid])}", reply_markup=kb_real(cid))
+        bot.send_message(cid,f"📊 {sum(history[cid])}/{len(history[cid])} ربح", reply_markup=kb_real(cid))
     elif d.startswith("lose_"):
         loss_streak[cid]=loss_streak.get(cid,0)+1
         history[cid]=history.get(cid,[])+[0]
         if loss_streak[cid]>=2:
             blocked[cid]=datetime.now()+timedelta(minutes=30)
             alert_real[cid]=False
-            bot.send_message(cid,"🛑 وقف 30 د", reply_markup=kb_real(cid))
+            bot.send_message(cid,"🛑 خسارتين - وقف 30 دقيقة حماية", reply_markup=kb_real(cid))
         else:
-            bot.send_message(cid,f"⚠️ {loss_streak[cid]}/2", reply_markup=kb_real(cid))
+            bot.send_message(cid,f"⚠️ تنبيه {loss_streak[cid]}/2 خساير", reply_markup=kb_real(cid))
     elif d=="gold_real":
-        bot.send_message(cid,"💪🏻 يفحص...")
+        bot.send_message(cid,"⚡ يفحص السوق الآن...")
         best=None
         for n,s in MARKETS_REAL.items():
             c,di,p = strong_ai(s)
@@ -166,12 +167,26 @@ def cb(call):
         if best and best[0]>=90:
             e="🟢 صعود" if best[1]=="BUY" else "🔴 هبوط"
             t,_ = jeddah_time()
-            bot.send_message(cid,f"💪🏻 {best[2]}\n{e} {best[0]}%\n📊 {best[3]}\n⏱️ 15 دقيقة\n{t} ⏰", reply_markup=kb_real(cid))
-        else: bot.send_message(cid,"⚪ ينتظر ساعة ذهبية", reply_markup=kb_real(cid))
+            bot.send_message(cid,f"🎯 {best[2]}\n{e} {best[0]}%\n📊 {best[3]}\n⏱️ 15 دقيقة\n{t} ⏰", reply_markup=kb_real(cid))
+        else: bot.send_message(cid,"⚪ السوق هادئ - لا توجد إشارة الآن", reply_markup=kb_real(cid))
+    elif d=="scan_all":
+        bot.send_message(cid,"🔍 جاري فحص الـ 4 أسواق...")
+        found=[]
+        for n,s in MARKETS_REAL.items():
+            c,di,p = strong_ai(s)
+            if c>=90 and di!="WAIT":
+                e="🟢 صعود" if di=="BUY" else "🔴 هبوط"
+                found.append(f"{e} {n} {c}%")
+        if found:
+            t,_ = jeddah_time()
+            text=f"💎 فحص شامل ({len(found)})\n{t} ⏰\n\n" + "\n".join(found)
+            bot.send_message(cid,text, reply_markup=kb_real(cid))
+        else:
+            bot.send_message(cid,"⚪ لا توجد فرص حالياً في الـ 4 أسواق", reply_markup=kb_real(cid))
 
 app=Flask(__name__)
 @app.route('/')
-def h(): return "OK MONSTER 30MIN"
+def h(): return "OK"
 threading.Thread(target=lambda: app.run(host="0.0.0.0", port=int(os.environ.get("PORT",10000))), daemon=True).start()
 threading.Thread(target=scanner, daemon=True).start()
 bot.remove_webhook(); time.sleep(1)
