@@ -8,77 +8,69 @@ from tradingview_ta import TA_Handler, Interval
 
 TOKEN = os.environ.get("TOKEN") or "8828337019:AAHgUTyjrxMk7IkJpMZzseKbroltKInaCes"
 bot = telebot.TeleBot(TOKEN, threaded=False)
-
 PASSWORD = "7154"
-allowed = {}
-alert_real, alert_otc = {}, {}
-loss_streak = {}
-blocked = {}
+allowed = {}; alert_real = {}; loss_streak = {}; blocked = {}; history = {}
 
-MARKETS_REAL = {
-    "🇪🇺/🇺🇸 EUR/USD":"EURUSD","🇬🇧/🇺🇸 GBP/USD":"GBPUSD","🇺🇸/🇯🇵 USD/JPY":"USDJPY",
-    "🇦🇺/🇺🇸 AUD/USD":"AUDUSD","🇺🇸/🇨🇦 USD/CAD":"USDCAD","🇪🇺/🇯🇵 EUR/JPY":"EURJPY",
-    "🇬🇧/🇯🇵 GBP/JPY":"GBPJPY","🇪🇺/🇬🇧 EUR/GBP":"EURGBP"
-}
-MARKETS_OTC = {
-    "🇪🇺/🇺🇸 EUR/USD OTC":"EURUSD","🇬🇧/🇺🇸 GBP/USD OTC":"GBPUSD","🇺🇸/🇯🇵 USD/JPY OTC":"USDJPY",
-    "🇦🇺/🇺🇸 AUD/USD OTC":"AUDUSD","🇪🇺/🇯🇵 EUR/JPY OTC":"EURJPY","🇬🇧/🇯🇵 GBP/JPY OTC":"GBPJPY"
+MARKETS_REAL = {"🇪🇺/🇺🇸 EUR/USD":"EURUSD","🇬🇧/🇺🇸 GBP/USD":"GBPUSD","🇺🇸/🇯🇵 USD/JPY":"USDJPY","🇪🇺/🇯🇵 EUR/JPY":"EURJPY"}
+TEACHER_PATTERNS = {
+    "EURUSD": {"best_hours": [8,9,13,14,15,20,21], "avoid_adx_below": 25, "best_rsi": (48,62)},
+    "GBPUSD": {"best_hours": [8,9,10,14,15,20], "avoid_adx_below": 27, "best_rsi": (45,60)},
+    "USDJPY": {"best_hours": [2,3,8,9,20,21,22], "avoid_adx_below": 23, "best_rsi": (50,65)},
+    "EURJPY": {"best_hours": [8,9,13,14,20,21], "avoid_adx_below": 25, "best_rsi": (46,61)}
 }
 
 def is_open():
     n=datetime.now()
     return not (n.weekday()>=5 or (n.weekday()==4 and n.hour>=23))
 
-def pro_check(sym, ex):
-    try:
-        h=TA_Handler(symbol=sym, screener="forex", exchange=ex, interval=Interval.INTERVAL_5_MINUTES)
-        a=h.get_analysis()
-        ind=a.indicators
-        rec=a.summary["RECOMMENDATION"]
-        adx=ind.get("ADX",0)
-        rsi=ind.get("RSI",50)
-        ema20=ind.get("EMA20",0)
-        ema50=ind.get("EMA50",0)
-        macd=ind.get("MACD.macd",0)
-        macd_sig=ind.get("MACD.signal",0)
-        bb_up=ind.get("BB.upper",0)
-        bb_low=ind.get("BB.lower",0)
-        close=ind.get("close",0)
-        if adx < 25: return 0,"WAIT"
-        if rsi > 75 or rsi < 25: return 0,"WAIT"
-        if close > bb_up*0.999 or close < bb_low*1.001: return 0,"WAIT"
-        up = ema20 > ema50 and close > ema20 and macd > macd_sig
-        down = ema20 < ema50 and close < ema20 and macd < macd_sig
-        if up and "BUY" in rec and 30<rsi<70:
-            conf = min(95, 82 + int((adx-25)//2))
-            return conf,"BUY"
-        if down and "SELL" in rec and 30<rsi<70:
-            conf = min(95, 82 + int((adx-25)//2))
-            return conf,"SELL"
-    except: pass
-    return 0,"WAIT"
-
-def multi_pro(sym):
-    res=[]
-    for ex in ["OANDA","FXCM","FOREXCOM"]:
-        c,d=pro_check(sym,ex)
-        res.append((c,d))
-        time.sleep(0.35)
-    buys=sum(1 for _,d in res if d=="BUY")
-    sells=sum(1 for _,d in res if d=="SELL")
-    avg=sum(c for c,_ in res)//3 if res else 0
-    if buys==3 and avg>=88: return avg,"BUY"
-    if sells==3 and avg>=88: return avg,"SELL"
-    if buys>=2 and avg>=85: return avg,"BUY"
-    if sells>=2 and avg>=85: return avg,"SELL"
-    for c,d in res:
-        if c>=90 and d!="WAIT": return c,d
-    return 0,"WAIT"
-
 def jeddah_time():
     now = datetime.now(ZoneInfo("Asia/Riyadh"))
     nxt = now + timedelta(minutes=1)
-    return nxt.strftime("%I:%M").lstrip("0") + (" ص" if nxt.hour < 12 else " م")
+    h12 = nxt.hour % 12
+    if h12==0: h12=12
+    am_pm = "ص" if nxt.hour < 12 else "م"
+    return f"{h12}:{nxt.minute:02d} {am_pm}", nxt.hour
+
+def strong_ai(symbol):
+    try:
+        teacher = TEACHER_PATTERNS.get(symbol)
+        time_str, hour_now = jeddah_time()
+        if hour_now not in teacher["best_hours"]:
+            return 0,"WAIT","مو ساعة ذهبية"
+        h5 = TA_Handler(symbol=symbol, screener="forex", exchange="OANDA", interval=Interval.INTERVAL_5_MINUTES)
+        h15 = TA_Handler(symbol=symbol, screener="forex", exchange="OANDA", interval=Interval.INTERVAL_15_MINUTES)
+        a5 = h5.get_analysis().indicators
+        s5 = h5.get_analysis().summary
+        s15 = h15.get_analysis().summary
+        rsi = a5.get("RSI",50); adx = a5.get("ADX",20)
+        ema20 = a5.get("EMA20",0); ema50 = a5.get("EMA50",0); ema200 = a5.get("EMA200",0)
+        close = a5.get("close",0); open_ = a5.get("open",0)
+        macd = a5.get("MACD.macd",0); macd_sig = a5.get("MACD.signal",0)
+        stoch_k = a5.get("Stoch.K",50); stoch_d = a5.get("Stoch.D",50)
+        bb_upper = a5.get("BB.upper",0); bb_lower = a5.get("BB.lower",0)
+        if adx < teacher["avoid_adx_below"]: return 0,"WAIT","ADX ضعيف"
+        rsi_low, rsi_high = teacher["best_rsi"]
+        if not (rsi_low <= rsi <= rsi_high): return 0,"WAIT","RSI"
+        if close > ema20 > ema50 > ema200: bias="BUY"; score=75
+        elif close < ema20 < ema50 < ema200: bias="SELL"; score=25
+        else: return 0,"WAIT","متوسطات"
+        if bias=="BUY" and (macd-macd_sig) < 0.0002: return 0,"WAIT","MACD"
+        if bias=="SELL" and (macd-macd_sig) > -0.0002: return 0,"WAIT","MACD"
+        if bias=="BUY": score+=8
+        else: score-=8
+        if bias=="BUY" and not (stoch_k < 35 and stoch_k > stoch_d): return 0,"WAIT","ستوكاستك"
+        if bias=="SELL" and not (stoch_k > 65 and stoch_k < stoch_d): return 0,"WAIT","ستوكاستك"
+        if bias=="BUY" and close >= bb_upper*0.998: return 0,"WAIT","بولنجر"
+        if bias=="SELL" and close <= bb_lower*1.002: return 0,"WAIT","بولنجر"
+        rec5 = s5["RECOMMENDATION"]; rec15 = s15["RECOMMENDATION"]
+        if bias=="BUY" and "BUY" in rec5 and "BUY" in rec15 and "STRONG_BUY" in rec5: score+=15
+        elif bias=="SELL" and "SELL" in rec5 and "SELL" in rec15 and "STRONG_SELL" in rec5: score-=15
+        else: return 0,"WAIT","مو STRONG"
+        if abs(close-open_)*10000 < 3: return 0,"WAIT","شمعة ضعيفة"
+        if score>=88: return 94,"BUY","وحش 90%"
+        elif score<=12: return 94,"SELL","وحش 90%"
+        else: return 0,"WAIT",""
+    except: return 0,"WAIT","خطأ"
 
 def scanner():
     while True:
@@ -88,45 +80,25 @@ def scanner():
                 if cid in blocked and datetime.now()<blocked[cid]: continue
                 if cid in blocked and datetime.now()>=blocked[cid]:
                     del blocked[cid]; loss_streak[cid]=0
-                    bot.send_message(cid,"✅ انتهى الحظر")
+                    bot.send_message(cid,"✅ انتهى الحظر 30د - رجع الوحش")
                     alert_real[cid]=False; continue
-                if not is_open():
-                    bot.send_message(cid,"⏸️ السوق مقفل")
-                    alert_real[cid]=False; continue
+                if not is_open(): bot.send_message(cid,"⏸️ السوق مقفل"); alert_real[cid]=False; continue
                 for name,sym in MARKETS_REAL.items():
-                    c,d=multi_pro(sym)
-                    if c>=85 and d!="WAIT":
+                    c,d,p = strong_ai(sym)
+                    if c>=90 and d!="WAIT":
                         e="🟢 صعود" if d=="BUY" else "🔴 هبوط"
-                        t=jeddah_time()
+                        t,_ = jeddah_time()
                         mk=InlineKeyboardMarkup(row_width=2)
-                        mk.add(InlineKeyboardButton("✅ ربح", callback_data=f"win_{cid}"),
-                               InlineKeyboardButton("❌ خسارة", callback_data=f"lose_{cid}"))
-                        bot.send_message(cid,f"🔔 {name}\n{e} {c}%\n{t} ⏰", reply_markup=mk)
-                        time.sleep(300); break
-                    time.sleep(0.8)
-            for cid,on in list(alert_otc.items()):
-                if not on: continue
-                if cid in blocked and datetime.now()<blocked[cid]: continue
-                for name,sym in MARKETS_OTC.items():
-                    c,d=multi_pro(sym)
-                    if c>=85 and d!="WAIT":
-                        e="🟢 صعود" if d=="BUY" else "🔴 هبوط"
-                        t=jeddah_time()
-                        mk=InlineKeyboardMarkup(row_width=2)
-                        mk.add(InlineKeyboardButton("✅ ربح", callback_data=f"win_{cid}"),
-                               InlineKeyboardButton("❌ خسارة", callback_data=f"lose_{cid}"))
-                        bot.send_message(cid,f"🔔 {name}\n{e} {c}%\n{t} ⏰", reply_markup=mk)
-                        time.sleep(300); break
-                    time.sleep(0.8)
-            time.sleep(40)
-        except:
-            time.sleep(10)
+                        mk.add(InlineKeyboardButton("✅ ربح", callback_data=f"win_{cid}"), InlineKeyboardButton("❌ خسارة", callback_data=f"lose_{cid}"))
+                        bot.send_message(cid,f"💪🏻 الوحش 90%+\n🔔 {name}\n{e} {c}%\n📊 {p}\n⏱️ 15 دقيقة\n{t} ⏰", reply_markup=mk)
+                        time.sleep(600); break
+                    time.sleep(1.5)
+            time.sleep(60)
+        except: time.sleep(10)
 
 def kb_start():
     mk=InlineKeyboardMarkup(row_width=1)
-    mk.add(InlineKeyboardButton("🏦 PRO REAL", callback_data="mode_real"))
-    mk.add(InlineKeyboardButton("📟 PRO OTC", callback_data="mode_otc"))
-    mk.add(InlineKeyboardButton("🔍 فحص سوق واحد", callback_data="single_main"))
+    mk.add(InlineKeyboardButton("💪🏻 بوت الوحش 90%", callback_data="mode_real"))
     return mk
 
 def kb_real(cid):
@@ -135,23 +107,9 @@ def kb_real(cid):
         r=int((blocked[cid]-datetime.now()).total_seconds()//60)
         mk.add(InlineKeyboardButton(f"🛑 محظور {r} د", callback_data="blocked"))
     else:
-        txt="⏸️ اطفاء" if alert_real.get(cid,False) else "▶️ تشغيل 24 ساعة"
+        txt="⏸️ اطفاء" if alert_real.get(cid,False) else "▶️ تشغيل الوحش 24س"
         mk.add(InlineKeyboardButton(txt, callback_data="toggle_real"))
-    mk.add(InlineKeyboardButton("💎 فرصة PRO", callback_data="gold_real"))
-    mk.add(InlineKeyboardButton("🔍 فحص سوق واحد", callback_data="single_real"))
-    mk.add(InlineKeyboardButton("⬅️ رجوع", callback_data="back_start"))
-    return mk
-
-def kb_otc(cid):
-    mk=InlineKeyboardMarkup(row_width=1)
-    if cid in blocked and datetime.now()<blocked[cid]:
-        r=int((blocked[cid]-datetime.now()).total_seconds()//60)
-        mk.add(InlineKeyboardButton(f"🛑 محظور {r} د", callback_data="blocked"))
-    else:
-        txt="⏸️ اطفاء" if alert_otc.get(cid,False) else "▶️ تشغيل 24 ساعة"
-        mk.add(InlineKeyboardButton(txt, callback_data="toggle_otc"))
-    mk.add(InlineKeyboardButton("💎 فرصة PRO", callback_data="gold_otc"))
-    mk.add(InlineKeyboardButton("🔍 فحص سوق واحد", callback_data="single_otc"))
+    mk.add(InlineKeyboardButton("💎 فرصة وحش", callback_data="gold_real"))
     mk.add(InlineKeyboardButton("⬅️ رجوع", callback_data="back_start"))
     return mk
 
@@ -159,7 +117,7 @@ def kb_otc(cid):
 def start(m):
     cid=m.chat.id
     if cid in allowed and allowed[cid]:
-        bot.send_message(cid,"اختر:", reply_markup=kb_start())
+        bot.send_message(cid,"💪🏻 جاهز - وقف 30د", reply_markup=kb_start())
     else:
         msg=bot.send_message(cid,"🔒 الرقم السري:")
         bot.register_next_step_handler(msg, lambda x: check_pass(x))
@@ -177,85 +135,43 @@ def check_pass(m):
 def cb(call):
     cid=call.message.chat.id; d=call.data
     if cid not in allowed or not allowed[cid]: return
-    if d=="mode_real": bot.send_message(cid,"🏦 الحقيقي", reply_markup=kb_real(cid))
-    elif d=="mode_otc": bot.send_message(cid,"📟 OTC", reply_markup=kb_otc(cid))
+    if d=="mode_real": bot.send_message(cid,"💪🏻 الوحش - 90% - وقف 30د", reply_markup=kb_real(cid))
     elif d=="back_start": bot.send_message(cid,"اختر:", reply_markup=kb_start())
-    elif d=="single_main":
-        mk=InlineKeyboardMarkup(row_width=2)
-        for n in MARKETS_REAL.keys(): mk.add(InlineKeyboardButton(n, callback_data=f"chkR_{n}"))
-        for n in MARKETS_OTC.keys(): mk.add(InlineKeyboardButton(n, callback_data=f"chkO_{n}"))
-        mk.add(InlineKeyboardButton("⬅️ رجوع", callback_data="back_start"))
-        bot.send_message(cid,"الاسواق:", reply_markup=mk)
     elif d=="blocked":
         r=int((blocked[cid]-datetime.now()).total_seconds()//60)
         bot.send_message(cid,f"🛑 باقي {r} د", reply_markup=kb_real(cid))
     elif d=="toggle_real":
         if cid in blocked and datetime.now()<blocked[cid]: return
         alert_real[cid]=not alert_real.get(cid,False)
-        bot.send_message(cid,"✅ شغال 24 ساعة" if alert_real[cid] else "⏸️ وقف", reply_markup=kb_real(cid))
-    elif d=="toggle_otc":
-        if cid in blocked and datetime.now()<blocked[cid]: return
-        alert_otc[cid]=not alert_otc.get(cid,False)
-        bot.send_message(cid,"✅ شغال 24 ساعة" if alert_otc[cid] else "⏸️ وقف", reply_markup=kb_otc(cid))
+        bot.send_message(cid,"✅ شغال" if alert_real[cid] else "⏸️ وقف", reply_markup=kb_real(cid))
     elif d.startswith("win_"):
         loss_streak[cid]=0
-        bot.send_message(cid,"✅", reply_markup=kb_real(cid))
+        history[cid]=history.get(cid,[])+[1]
+        bot.send_message(cid,f"💪🏻 {sum(history[cid])}/{len(history[cid])}", reply_markup=kb_real(cid))
     elif d.startswith("lose_"):
         loss_streak[cid]=loss_streak.get(cid,0)+1
+        history[cid]=history.get(cid,[])+[0]
         if loss_streak[cid]>=2:
-            blocked[cid]=datetime.now()+timedelta(minutes=50)
-            alert_real[cid]=False; alert_otc[cid]=False
-            bot.send_message(cid,"🛑 وقفتك 50 د", reply_markup=kb_real(cid))
+            blocked[cid]=datetime.now()+timedelta(minutes=30)
+            alert_real[cid]=False
+            bot.send_message(cid,"🛑 وقف 30 د", reply_markup=kb_real(cid))
         else:
             bot.send_message(cid,f"⚠️ {loss_streak[cid]}/2", reply_markup=kb_real(cid))
     elif d=="gold_real":
-        bot.send_message(cid,"⏳ جاري الفحص...")
+        bot.send_message(cid,"💪🏻 يفحص...")
         best=None
         for n,s in MARKETS_REAL.items():
-            c,di=multi_pro(s)
-            if not best or c>best[0]: best=(c,di,n)
-        if best and best[0]>=85:
+            c,di,p = strong_ai(s)
+            if not best or c>best[0]: best=(c,di,n,p)
+        if best and best[0]>=90:
             e="🟢 صعود" if best[1]=="BUY" else "🔴 هبوط"
-            t=jeddah_time()
-            bot.send_message(cid,f"{best[2]}\n{e} {best[0]}%\n{t} ⏰", reply_markup=kb_real(cid))
-        else: bot.send_message(cid,"⚪ انتظار - السوق متذبذب", reply_markup=kb_real(cid))
-    elif d=="gold_otc":
-        bot.send_message(cid,"⏳ جاري الفحص...")
-        best=None
-        for n,s in MARKETS_OTC.items():
-            c,di=multi_pro(s)
-            if not best or c>best[0]: best=(c,di,n)
-        if best and best[0]>=85:
-            e="🟢 صعود" if best[1]=="BUY" else "🔴 هبوط"
-            t=jeddah_time()
-            bot.send_message(cid,f"{best[2]}\n{e} {best[0]}%\n{t} ⏰", reply_markup=kb_otc(cid))
-        else: bot.send_message(cid,"⚪ انتظار", reply_markup=kb_otc(cid))
-    elif d=="single_real":
-        mk=InlineKeyboardMarkup(row_width=2)
-        for n in MARKETS_REAL.keys(): mk.add(InlineKeyboardButton(n, callback_data=f"chkR_{n}"))
-        mk.add(InlineKeyboardButton("⬅️ رجوع", callback_data="mode_real"))
-        bot.send_message(cid,"الاسواق:", reply_markup=mk)
-    elif d=="single_otc":
-        mk=InlineKeyboardMarkup(row_width=2)
-        for n in MARKETS_OTC.keys(): mk.add(InlineKeyboardButton(n, callback_data=f"chkO_{n}"))
-        mk.add(InlineKeyboardButton("⬅️ رجوع", callback_data="mode_otc"))
-        bot.send_message(cid,"الاسواق:", reply_markup=mk)
-    elif d.startswith("chkR_"):
-        name=d.replace("chkR_","")
-        c,di=multi_pro(MARKETS_REAL[name])
-        e="🟢 صعود" if di=="BUY" else "🔴 هبوط" if di=="SELL" else "⚪ انتظار"
-        t=jeddah_time()
-        bot.send_message(cid,f"{name}\n{e} {c}%\n{t} ⏰" if c>=85 else f"{name}\n{e} - متذبذب", reply_markup=kb_real(cid))
-    elif d.startswith("chkO_"):
-        name=d.replace("chkO_","")
-        c,di=multi_pro(MARKETS_OTC[name])
-        e="🟢 صعود" if di=="BUY" else "🔴 هبوط" if di=="SELL" else "⚪ انتظار"
-        t=jeddah_time()
-        bot.send_message(cid,f"{name}\n{e} {c}%\n{t} ⏰" if c>=85 else f"{name}\n{e}", reply_markup=kb_otc(cid))
+            t,_ = jeddah_time()
+            bot.send_message(cid,f"💪🏻 {best[2]}\n{e} {best[0]}%\n📊 {best[3]}\n⏱️ 15 دقيقة\n{t} ⏰", reply_markup=kb_real(cid))
+        else: bot.send_message(cid,"⚪ ينتظر ساعة ذهبية", reply_markup=kb_real(cid))
 
 app=Flask(__name__)
 @app.route('/')
-def h(): return "OK"
+def h(): return "OK MONSTER 30MIN"
 threading.Thread(target=lambda: app.run(host="0.0.0.0", port=int(os.environ.get("PORT",10000))), daemon=True).start()
 threading.Thread(target=scanner, daemon=True).start()
 bot.remove_webhook(); time.sleep(1)
