@@ -1,4 +1,6 @@
-import os, time, threading
+import os
+import time
+import threading
 from flask import Flask
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -6,120 +8,334 @@ from tradingview_ta import TA_Handler, Interval
 from datetime import datetime
 import pytz
 
-TOKEN = os.environ.get("8828337019:AAHgUTyjrxMk7IkJpMZzseKbroltKInaCes")
-PASSWORD = os.environ.get("PASSWORD", "7154")
+TOKEN = "8828337019:AAHgUTyjrxMk7IkJpMZzseKbroltKInaCes"
+PASSWORD = "7154"
+bot = telebot.TeleBot(TOKEN, threaded=False)
 
-# لا يوقف السيرفر لو التوكن ناقص
-if not TOKEN:
-    print("WARNING: TOKEN not set!")
+MARKETS = {
+    "🇪🇺/🇺🇸 EUR/USD": "EURUSD", "🇬🇧/🇺🇸 GBP/USD": "GBPUSD", "🇺🇸/🇯🇵 USD/JPY": "USDJPY",
+    "🇦🇺/🇺🇸 AUD/USD": "AUDUSD", "🇺🇸/🇨🇦 USD/CAD": "USDCAD", "🇪🇺/🇯🇵 EUR/JPY": "EURJPY",
+    "🇨🇦/🇯🇵 CAD/JPY": "CADJPY", "🇪🇺/🇬🇧 EUR/GBP": "EURGBP", "🇦🇺/🇯🇵 AUD/JPY": "AUDJPY",
+    "🇳🇿/🇺🇸 NZD/USD": "NZDUSD", "🇪🇺/🇨🇭 EUR/CHF": "EURCHF", "🇬🇧/🇯🇵 GBP/JPY": "GBPJPY",
+    "🇦🇺/🇨🇦 AUD/CAD": "AUDCAD", "🇪🇺/🇦🇺 EUR/AUD": "EURAUD", "🇬🇧/🇨🇭 GBP/CHF": "GBPCHF",
+    "🇺🇸/🇨🇭 USD/CHF": "USDCHF", "🇪🇺/🇨🇦 EUR/CAD": "EURCAD", "🇦🇺/🇨🇭 AUD/CHF": "AUDCHF",
+    "🇬🇧/🇦🇺 GBP/AUD": "GBPAUD", "🇨🇦/🇨🇭 CAD/CHF": "CADCHF", "🇪🇺/🇳🇿 EUR/NZD": "EURNZD",
+    "🇬🇧/🇳🇿 GBP/NZD": "GBPNZD",
+}
 
-bot = telebot.TeleBot(TOKEN, threaded=False) if TOKEN else None
+MARKETS_OTC = {
+    "🟡 EUR/USD OTC": "EURUSD",
+    "🟡 GBP/USD OTC": "GBPUSD",
+    "🟡 EUR/JPY OTC": "EURJPY",
+}
 
-MARKETS = {"🇪🇺/🇺🇸 EUR/USD": "EURUSD", "🇬🇧/🇺🇸 GBP/USD": "GBPUSD"}
-MARKETS_MT5 = {"🏆 XAU/USD GOLD": "XAUUSD", "🇪🇺/🇺🇸 EUR/USD": "EURUSD"}
-MARKETS_OTC = {"🟡 EUR/USD OTC": "EURUSD"}
+MARKETS_MT5 = {
+    "🏆 XAU/USD GOLD - ذهب": "XAUUSD",
+    "🥇 XAG/USD SILVER - فضة": "XAGUSD",
+    "🇪🇺/🇺🇸 EUR/USD": "EURUSD", "🇬🇧/🇺🇸 GBP/USD": "GBPUSD", "🇺🇸/🇯🇵 USD/JPY": "USDJPY",
+    "🇦🇺/🇺🇸 AUD/USD": "AUDUSD", "🇺🇸/🇨🇦 USD/CAD": "USDCAD", "🇪🇺/🇯🇵 EUR/JPY": "EURJPY",
+    "🇨🇦/🇯🇵 CAD/JPY": "CADJPY", "🇪🇺/🇬🇧 EUR/GBP": "EURGBP", "🇦🇺/🇯🇵 AUD/JPY": "AUDJPY",
+    "🇳🇿/🇺🇸 NZD/USD": "NZDUSD", "🇪🇺/🇨🇭 EUR/CHF": "EURCHF", "🇬🇧/🇯🇵 GBP/JPY": "GBPJPY",
+}
 
+user_data = {}
+last_request = {}
 authorized = set()
+user_messages_to_clean = {}
+daily_trades = []
 KSA_TZ = pytz.timezone("Asia/Riyadh")
+
+def clean_old_signals(chat_id):
+    if chat_id in user_messages_to_clean:
+        for msg_id in user_messages_to_clean[chat_id]:
+            try: bot.delete_message(chat_id, msg_id)
+            except: pass
+        user_messages_to_clean[chat_id] = []
+
+def save_message_for_cleaning(chat_id, msg_id):
+    if chat_id not in user_messages_to_clean: user_messages_to_clean[chat_id] = []
+    user_messages_to_clean[chat_id].append(msg_id)
 
 def get_tf_signal(symbol, interval):
     try:
-        screener = "cfd" if "XAU" in symbol else "forex"
-        exchange = "OANDA" if "XAU" in symbol else "FX"
+        screener = "cfd" if "XAU" in symbol or "XAG" in symbol else "forex"
+        exchange = "OANDA" if "XAU" in symbol or "XAG" in symbol else "FX"
         h = TA_Handler(symbol=symbol, screener=screener, exchange=exchange, interval=interval)
         s = h.get_analysis().summary
-        if s['BUY']+s['SELL']==0: return "NEUTRAL",50
-        d = "BUY" if s['BUY']>s['SELL'] else "SELL"
-        return d, int((max(s['BUY'],s['SELL'])/(s['BUY']+s['SELL']))*100)
-    except: return "ERROR",0
+        if s['BUY']+s['SELL']==0: return "NEUTRAL", 50
+        direction = "BUY" if s['BUY']>s['SELL'] else "SELL"
+        percent = int((max(s['BUY'], s['SELL']) / (s['BUY']+s['SELL'])) * 100)
+        return direction, percent
+    except Exception as e:
+        print(f"Error {symbol}: {e}")
+        return "ERROR", 0
 
 def get_confluence_signal(symbol):
-    d5,p5 = get_tf_signal(symbol, Interval.INTERVAL_5_MINUTES)
-    d15,p15 = get_tf_signal(symbol, Interval.INTERVAL_15_MINUTES)
-    d1h,p1h = get_tf_signal(symbol, Interval.INTERVAL_1_HOUR)
-    if d5==d15==d1h and d5!="ERROR":
+    d5, p5 = get_tf_signal(symbol, Interval.INTERVAL_5_MINUTES)
+    d15, p15 = get_tf_signal(symbol, Interval.INTERVAL_15_MINUTES)
+    d1h, p1h = get_tf_signal(symbol, Interval.INTERVAL_1_HOUR)
+    if d5 == d15 == d1h and d5!= "ERROR":
         base = int(p5*0.30 + p15*0.35 + p1h*0.35)
-        return d5, base, f"H1:{p1h}% | 15m:{p15}% | 5m:{p5}%"
-    return "NO_TRADE",0,f"متضارب"
+        diff = max(p5, p15, p1h) - min(p5, p15, p1h)
+        if diff > 20: base -= 8
+        elif diff > 12: base -= 4
+        if min(p5, p15, p1h) < 65: base -= 8
+        if base > 92: base = 92
+        if base < 0: base = 0
+        final = base
+        if final >= 85: decision = "🔥🔥 ممتاز جدا - TOP ادخل 2% 🔥🔥"
+        elif final >= 78: decision = "✅ ممتاز - ادخل 1.5%"
+        elif final >= 70: decision = "✅ جيد - ادخل 1%"
+        else: decision = "⚠️ متوسط - لا تدخل"
+        return d5, final, f"H1:{p1h}% | 15m:{p15}% | 5m:{p5}%\n{decision}"
+    return "NO_TRADE", 0, f"H1:{p1h}% {d1h} | 15m:{p15}% {d15} | 5m:{p5}% {d5}\n\n❌ متضارب"
 
-def get_mt5_3targets(symbol):
-    d,p,details = get_confluence_signal(symbol)
-    if d=="NO_TRADE": return d,p,details,None
-    price = 4348.0 if "XAU" in symbol else 1.0850
+def get_confluence_signal_otc_15s(symbol):
+    d5, p5 = get_tf_signal(symbol, Interval.INTERVAL_5_MINUTES)
+    d15, p15 = get_tf_signal(symbol, Interval.INTERVAL_15_MINUTES)
+    d1h, p1h = get_tf_signal(symbol, Interval.INTERVAL_1_HOUR)
+    if d5 == d15 == d1h and d5!= "ERROR":
+        base = int(p5*0.30 + p15*0.35 + p1h*0.35)
+        diff = max(p5, p15, p1h) - min(p5, p15, p1h)
+        if diff > 20: base -= 8
+        elif diff > 12: base -= 4
+        if min(p5, p15, p1h) < 65: base -= 8
+        if base > 92: base = 92
+        if base < 0: base = 0
+        final = base
+        if final >= 85: decision = "🔥🔥 TOP جباره 15s ادخل 2% 🔥🔥"
+        elif final >= 78: decision = "✅ ممتاز 15s - ادخل 1.5%"
+        elif final >= 70: decision = "✅ جيد 15s - ادخل 1%"
+        else: decision = "⚠️ متوسط - لا تدخل"
+        return d5, final, f"H1:{p1h}% | 15m:{p15}% | 5m:{p5}%\n{decision}\n⏱️ المدة: 15 ثانية\n⏰ ادخل بداية الشمعة!"
+    return "NO_TRADE", 0, f"H1:{p1h}% {d1h} | 15m:{p15}% {d15} | 5m:{p5}% {d5}\n\n❌ متضارب"
+
+def get_mt5_signal_3targets(symbol):
+    d, p, details = get_confluence_signal(symbol)
+    if d == "NO_TRADE": return d, p, details, None
+    is_gold = "XAU" in symbol or "XAG" in symbol
     try:
-        scr = "cfd" if "XAU" in symbol else "forex"
-        exc = "OANDA" if "XAU" in symbol else "FX"
-        h = TA_Handler(symbol=symbol, screener=scr, exchange=exc, interval=Interval.INTERVAL_1_HOUR)
-        price = h.get_analysis().indicators.get('close', price)
-    except: pass
-    if "XAU" in symbol:
-        if d=="BUY": sl=price-13; tp1=price+7; tp2=price+14; tp3=price+27
-        else: sl=price+13; tp1=price-7; tp2=price-14; tp3=price-27
+        screener = "cfd" if is_gold else "forex"
+        exchange = "OANDA" if is_gold else "FX"
+        h = TA_Handler(symbol=symbol, screener=screener, exchange=exchange, interval=Interval.INTERVAL_1_HOUR)
+        price = h.get_analysis().indicators.get('close', 0)
+        if price == 0: price = 4348.0 if is_gold else 1.0850
+    except:
+        price = 4348.0 if is_gold else 1.0850
+    if is_gold:
+        if d == "BUY":
+            sl = round(price - 13, 2); tp1 = round(price + 7, 2); tp2 = round(price + 14, 2); tp3 = round(price + 27, 2)
+        else:
+            sl = round(price + 13, 2); tp1 = round(price - 7, 2); tp2 = round(price - 14, 2); tp3 = round(price - 27, 2)
     else:
-        if d=="BUY": sl=price-0.0020; tp1=price+0.0010; tp2=price+0.0020; tp3=price+0.0040
-        else: sl=price+0.0020; tp1=price-0.0010; tp2=price-0.0020; tp3=price-0.0040
-    levels={"entry":round(price,2),"sl":round(sl,2),"tp1":round(tp1,2),"tp2":round(tp2,2),"tp3":round(tp3,2)}
-    return d,p,details,levels
+        if d == "BUY":
+            sl = round(price - 0.0020, 5); tp1 = round(price + 0.0010, 5); tp2 = round(price + 0.0020, 5); tp3 = round(price + 0.0040, 5)
+        else:
+            sl = round(price + 0.0020, 5); tp1 = round(price - 0.0010, 5); tp2 = round(price - 0.0020, 5); tp3 = round(price - 0.0040, 5)
+    levels = {"entry": round(price, 2) if is_gold else round(price, 5), "sl": sl, "tp1": tp1, "tp2": tp2, "tp3": tp3}
+    return d, p, details, levels
 
 def main_menu(chat_id):
     markup = InlineKeyboardMarkup(row_width=2)
-    markup.add(InlineKeyboardButton("💰 MT5 - 3 أهداف", callback_data="mode_mt5"), InlineKeyboardButton("📉 POCKET", callback_data="mode_pocket"))
-    bot.send_message(chat_id, "اختر:", reply_markup=markup)
+    markup.add(
+        InlineKeyboardButton("💰 MT5 - 3 أهداف", callback_data="mode_mt5"),
+        InlineKeyboardButton("📉 POCKET - فوركس", callback_data="mode_pocket")
+    )
+    markup.add(InlineKeyboardButton("🌙 OTC - 15s", callback_data="otc_menu"))
+    markup.add(InlineKeyboardButton("📊 تقرير اليوم", callback_data="today_report"))
+    bot.send_message(chat_id, "💰 اختر نوع التداول:\n\n💰 MT5 = ذهب + فضة + 3 أهداف + شات نظيف\n📉 POCKET = فوركس عادي (كودك الأصلي)\n🌙 OTC = 15 ثانية", reply_markup=markup)
 
 @bot.message_handler(commands=['start'])
 def start(msg):
     if msg.from_user.id not in authorized:
         bot.send_message(msg.chat.id, "🔒 ارسل كلمة السر:"); return
+    clean_old_signals(msg.chat.id)
     main_menu(msg.chat.id)
 
 @bot.message_handler(func=lambda m: m.from_user.id not in authorized)
 def check_pass(m):
-    if m.text.strip()==PASSWORD:
-        authorized.add(m.from_user.id); bot.send_message(m.chat.id, "✅ تم"); main_menu(m.chat.id)
-    else: bot.send_message(m.chat.id, "❌ غلط")
+    if m.text.strip() == PASSWORD:
+        authorized.add(m.from_user.id); bot.send_message(m.chat.id, "✅ تم فتح البوت"); main_menu(m.chat.id)
+    else: bot.send_message(m.chat.id, "❌ كلمة سر غلط")
 
 @bot.callback_query_handler(func=lambda c: c.data=="mode_mt5")
 def mode_mt5(call):
+    if call.from_user.id not in authorized: return
+    bot.answer_callback_query(call.id); clean_old_signals(call.message.chat.id)
     markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(InlineKeyboardButton("🔥 فحص الكل - MT5", callback_data="golden_mt5"))
     for name in MARKETS_MT5: markup.add(InlineKeyboardButton(name, callback_data=f"market_mt5_{name}"))
-    bot.send_message(call.message.chat.id, "💰 MT5 - الذهب أول:", reply_markup=markup)
+    m = bot.send_message(call.message.chat.id, "💰 MT5 - اختر السوق (الذهب أول واحد):", reply_markup=markup)
+    save_message_for_cleaning(call.message.chat.id, m.message_id)
 
 @bot.callback_query_handler(func=lambda c: c.data=="mode_pocket")
 def mode_pocket(call):
+    if call.from_user.id not in authorized: return
+    bot.answer_callback_query(call.id); clean_old_signals(call.message.chat.id)
     markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(InlineKeyboardButton("🔥 الفرصة الذهبية (22 سوق)", callback_data="golden"))
     for name in MARKETS: markup.add(InlineKeyboardButton(name, callback_data=f"market_{name}"))
-    bot.send_message(call.message.chat.id, "📉 POCKET:", reply_markup=markup)
+    m = bot.send_message(call.message.chat.id, "📉 POCKET - اختر سوق فوركس:", reply_markup=markup)
+    save_message_for_cleaning(call.message.chat.id, m.message_id)
+
+@bot.callback_query_handler(func=lambda c: c.data=="golden")
+def golden(call):
+    if call.from_user.id not in authorized: return
+    bot.answer_callback_query(call.id, "⏳ افحص 22 سوق...")
+    loading = bot.send_message(call.message.chat.id, f"⏳ افحص {len(MARKETS)} سوق (25 ثانية)...")
+    save_message_for_cleaning(call.message.chat.id, loading.message_id)
+    goldens = []; start_t = time.time()
+    for name, sym in MARKETS.items():
+        try:
+            d, p, details = get_confluence_signal(sym)
+            if d!= "NO_TRADE" and p >= 70:
+                emoji = "🟢 BUY" if d=="BUY" else "🔴 SELL"
+                goldens.append((p, f"{emoji} {name} - {p}%\n{details}\n"))
+        except: continue
+    goldens.sort(key=lambda x: x[0], reverse=True)
+    elapsed = round(time.time() - start_t, 1)
+    if not goldens:
+        bot.edit_message_text(f"❌ فحصت {len(MARKETS)} سوق في {elapsed}ث - لا يوجد موثوق", call.message.chat.id, loading.message_id)
+    else:
+        best = goldens[0]
+        text = f"🏆 أفضل صفقة {best[0]}% 🏆\n{best[1]}\n━━━━━━━━━━━━\n"
+        for i, (p, detail) in enumerate(goldens[:5], 1): text += f"{i}. {detail}\n"
+        bot.edit_message_text(text, call.message.chat.id, loading.message_id)
+
+@bot.callback_query_handler(func=lambda c: c.data=="otc_menu")
+def otc_menu(call):
+    if call.from_user.id not in authorized: return
+    bot.answer_callback_query(call.id)
+    markup = InlineKeyboardMarkup(row_width=1)
+    markup.add(InlineKeyboardButton("🔥 فحص OTC الثلاثة", callback_data="golden_otc"))
+    markup.add(InlineKeyboardButton("📊 فحص سوق واحد OTC", callback_data="single_otc"))
+    m = bot.send_message(call.message.chat.id, "🌙 OTC - اختر:", reply_markup=markup)
+    save_message_for_cleaning(call.message.chat.id, m.message_id)
+
+@bot.callback_query_handler(func=lambda c: c.data=="single_otc")
+def single_otc(call):
+    if call.from_user.id not in authorized: return
+    bot.answer_callback_query(call.id)
+    markup = InlineKeyboardMarkup(row_width=2)
+    for name in MARKETS_OTC: markup.add(InlineKeyboardButton(name, callback_data=f"market_otc_{name}"))
+    m = bot.send_message(call.message.chat.id, "اختر سوق OTC:", reply_markup=markup)
+    save_message_for_cleaning(call.message.chat.id, m.message_id)
+
+@bot.callback_query_handler(func=lambda c: c.data=="golden_otc")
+def golden_otc(call):
+    if call.from_user.id not in authorized: return
+    bot.answer_callback_query(call.id, "⏳ افحص OTC...")
+    loading = bot.send_message(call.message.chat.id, f"⚡ افحص {len(MARKETS_OTC)} اسواق OTC...")
+    save_message_for_cleaning(call.message.chat.id, loading.message_id)
+    goldens = []; start_t = time.time()
+    for name, sym in MARKETS_OTC.items():
+        try:
+            d, p, details = get_confluence_signal_otc_15s(sym)
+            if d!= "NO_TRADE" and p >= 70:
+                emoji = "🟢 BUY" if d=="BUY" else "🔴 SELL"
+                goldens.append((p, f"{emoji} {name} - {p}%\n{details}\n"))
+        except: continue
+    goldens.sort(key=lambda x: x[0], reverse=True)
+    if not goldens: bot.edit_message_text(f"❌ لا يوجد موثوق", call.message.chat.id, loading.message_id)
+    else:
+        text = f"🏆 أفضل OTC {goldens[0][0]}% 🏆\n{goldens[0][1]}\n"; bot.edit_message_text(text, call.message.chat.id, loading.message_id)
+
+@bot.callback_query_handler(func=lambda c: c.data=="golden_mt5")
+def golden_mt5(call):
+    if call.from_user.id not in authorized: return
+    bot.answer_callback_query(call.id, "⏳ افحص أسواق MT5...")
+    clean_old_signals(call.message.chat.id)
+    loading = bot.send_message(call.message.chat.id, f"⏳ افحص {len(MARKETS_MT5)} سوق MT5...")
+    save_message_for_cleaning(call.message.chat.id, loading.message_id)
+    goldens = []
+    for name, sym in MARKETS_MT5.items():
+        try:
+            d, p, details, levels = get_mt5_signal_3targets(sym)
+            if d!= "NO_TRADE" and p >= 70 and levels:
+                emoji = "🟢 BUY" if d=="BUY" else "🔴 SELL"
+                txt = f"{emoji} {name} - {p}%\nENTRY {levels['entry']} | SL {levels['sl']}\nTP1 {levels['tp1']} | TP2 {levels['tp2']} | TP3 {levels['tp3']}\n{details}\n"
+                goldens.append((p, txt))
+                daily_trades.append({"pair": name, "dir": d, "p": p, "entry": levels['entry']})
+        except: continue
+    goldens.sort(key=lambda x: x[0], reverse=True)
+    if not goldens: bot.edit_message_text(f"❌ لا يوجد موثوق MT5 حاليا", call.message.chat.id, loading.message_id)
+    else:
+        text = f"🏆 أفضل صفقة MT5 {goldens[0][0]}% 🏆\n\n"
+        for i, (p, detail) in enumerate(goldens[:5], 1): text += f"{i}. {detail}\n━━━━━━━━━━━━\n"
+        bot.edit_message_text(text, call.message.chat.id, loading.message_id)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("market_mt5_"))
 def choose_mt5(call):
+    if call.from_user.id not in authorized: return
+    bot.answer_callback_query(call.id)
     name = call.data.replace("market_mt5_", ""); symbol = MARKETS_MT5[name]
-    d,p,details,levels = get_mt5_3targets(symbol)
-    if d=="NO_TRADE": bot.send_message(call.message.chat.id, f"📊 {name}\n{details}")
+    clean_old_signals(call.message.chat.id)
+    loading = bot.send_message(call.message.chat.id, f"⏳ جاري فحص {name} MT5...")
+    save_message_for_cleaning(call.message.chat.id, loading.message_id)
+    d, p, details, levels = get_mt5_signal_3targets(symbol)
+    if d == "NO_TRADE": bot.edit_message_text(f"📊 {name}\n{details}", call.message.chat.id, loading.message_id)
     else:
         emoji="🟢 BUY" if d=="BUY" else "🔴 SELL"
-        text=f"💰 MT5 - {name} - {emoji}\n🎯 ENTRY: {levels['entry']}\n❌ SL: {levels['sl']}\n✅ TP1: {levels['tp1']} (50%)\n✅ TP2: {levels['tp2']} (30%)\n✅ TP3: {levels['tp3']} (20%)\n💪 {p}%"
-        bot.send_message(call.message.chat.id, text)
+        text=f"💰 MT5 - {name} - {emoji}\n━━━━━━━━━━━━━━━\n💪 ثقة: {p}%\n{details}\n━━━━━━━━━━━━━━━\n🎯 ENTRY: {levels['entry']}\n❌ SL: {levels['sl']}\n✅ TP1: {levels['tp1']} (50%)\n✅ TP2: {levels['tp2']} (30%)\n✅ TP3: {levels['tp3']} (20%)\n━━━━━━━━━━━━━━━\n📱 للجوال MT5:\n1- الحجم 0.01\n2- SL {levels['sl']}\n3- TP {levels['tp1']} أول"
+        bot.edit_message_text(text, call.message.chat.id, loading.message_id)
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith("market_") and "mt5" not in c.data)
+@bot.callback_query_handler(func=lambda c: c.data.startswith("market_otc_"))
+def choose_otc(call):
+    if call.from_user.id not in authorized: return
+    bot.answer_callback_query(call.id)
+    name = call.data.replace("market_otc_", ""); symbol = MARKETS_OTC[name]
+    loading = bot.send_message(call.message.chat.id, f"⏳ جاري فحص {name} 15s...")
+    save_message_for_cleaning(call.message.chat.id, loading.message_id)
+    d, p, details = get_confluence_signal_otc_15s(symbol)
+    if d == "NO_TRADE": bot.edit_message_text(f"📊 {name} 15s\n{details}", call.message.chat.id, loading.message_id)
+    else:
+        emoji="🟢 BUY" if d=="BUY" else "🔴 SELL"
+        bot.edit_message_text(f"🌙 {name} 15s\n{emoji}\n💪 {p}%\n\n{details}", call.message.chat.id, loading.message_id)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("market_") and "mt5" not in c.data and "otc" not in c.data)
 def choose_market(call):
-    name = call.data.replace("market_", ""); symbol = MARKETS.get(name)
+    if call.from_user.id not in authorized: return
+    bot.answer_callback_query(call.id)
+    name = call.data.replace("market_", "")
+    if name not in MARKETS: return
+    user_data[call.from_user.id] = MARKETS[name], name
+    markup = InlineKeyboardMarkup(row_width=1)
+    markup.add(InlineKeyboardButton("🔍 فحص شامل H1+15m+5m", callback_data="time_ALL"))
+    m = bot.send_message(call.message.chat.id, f"اخترت {name}\nاختر نوع الفحص:", reply_markup=markup)
+    save_message_for_cleaning(call.message.chat.id, m.message_id)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("time_"))
+def choose_time(call):
+    if call.from_user.id not in authorized: return
+    mode = call.data.replace("time_", ""); symbol, name = user_data.get(call.from_user.id, (None, None))
     if not symbol: return
-    d,p,details = get_confluence_signal(symbol)
-    bot.send_message(call.message.chat.id, f"📊 {name}\n{d}\n💪 {p}%\n{details}")
+    loading = bot.send_message(call.message.chat.id, f"⏳ جاري فحص {name}...")
+    save_message_for_cleaning(call.message.chat.id, loading.message_id)
+    if mode == "ALL":
+        direction, percent, details = get_confluence_signal(symbol)
+        if direction == "NO_TRADE": bot.edit_message_text(f"📊 {name}\n{details}", call.message.chat.id, loading.message_id); return
+        emoji = "🟢 BUY" if direction == "BUY" else "🔴 SELL"
+        bot.edit_message_text(f"📊 {name}\n{emoji}\n💪 {percent}%\n\n{details}", call.message.chat.id, loading.message_id)
+
+@bot.callback_query_handler(func=lambda c: c.data=="today_report")
+def today_report(call):
+    if not daily_trades: bot.send_message(call.message.chat.id, "📊 اليوم ما فيه صفقات بعد"); return
+    text = f"📊 تقرير اليوم\n━━━━━━━━━━━━━━━\n"
+    for i, t in enumerate(daily_trades, 1): text += f"{i}. {t['pair']} {t['dir']} {t['p']}% ENTRY {t['entry']}\n"
+    bot.send_message(call.message.chat.id, text)
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Bot is Live!"
+def home(): return "Bot is Live! MT5 + POCKET + OTC"
 
 def run_flask():
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
 
 def run_bot():
-    if not TOKEN: return
-    bot.remove_webhook(); time.sleep(1)
+    bot.remove_webhook(); time.sleep(2)
     while True:
-        try: bot.infinity_polling(skip_pending=True, timeout=60)
-        except Exception as e: print(f"Bot error: {e}"); time.sleep(5)
+        try: bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=60)
+        except Exception as e: print(f"Error: {e}"); time.sleep(5)
 
 threading.Thread(target=run_flask, daemon=True).start()
 threading.Thread(target=run_bot, daemon=True).start()
