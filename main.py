@@ -50,21 +50,19 @@ BINANCE_OTC_MAP = {
 }
 
 BINANCE_CACHE = {}
-BINANCE_CACHE_TIME = 15
+BINANCE_CACHE_TIME = 10  # كاش أسرع
 
-def get_binance_klines(symbol, interval, limit=100):
-    """جيب شموع من Binance"""
+def get_binance_klines(symbol, interval, limit=30):
+    """جيب شموع من Binance - سريع"""
     try:
-        # interval: 1m, 5m, 15m
         url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
-        r = requests.get(url, timeout=5)
+        r = requests.get(url, timeout=2.5)  # تايم أوت سريع
         if r.status_code != 200:
             return None
         data = r.json()
-        closes = [float(c[4]) for c in data]  # close prices
+        closes = [float(c[4]) for c in data]
         return closes
-    except Exception as e:
-        print(f"Binance error {symbol} {interval}: {e}")
+    except:
         return None
 
 def calc_rsi(prices, period=14):
@@ -107,7 +105,7 @@ def calc_macd(prices):
     return macd, signal
 
 def get_binance_tf_signal(symbol, interval_str):
-    """إشارة من Binance لفريم واحد"""
+    """إشارة سريعة من Binance"""
     cache_key = f"BN_{symbol}_{interval_str}"
     now = time.time()
     if cache_key in BINANCE_CACHE:
@@ -115,9 +113,9 @@ def get_binance_tf_signal(symbol, interval_str):
         if now - t < BINANCE_CACHE_TIME:
             return d
 
-    closes = get_binance_klines(symbol, interval_str, 100)
-    if not closes or len(closes) < 30:
-        return "NEUTRAL", 50, 50, 0, 0
+    closes = get_binance_klines(symbol, interval_str, 30)
+    if not closes or len(closes) < 20:
+        return "NEUTRAL", 0, 50, 0, 0
 
     rsi = calc_rsi(closes, 14)
     macd, sig = calc_macd(closes)
@@ -163,34 +161,34 @@ def get_binance_tf_signal(symbol, interval_str):
     return result
 
 def get_strong_signal_otc_binance(symbol):
-    """إشارة OTC قوية من Binance - 1m+5m+15m"""
+    """إشارة OTC سريعة من Binance - فريم 1m+5m فقط عشان ما يعلق"""
     bin_symbol = BINANCE_OTC_MAP.get(symbol, "BTCUSDT")
     
+    # طلب واحد فقط 1m للسرعة
     d1,p1,r1,_,_ = get_binance_tf_signal(bin_symbol, "1m")
-    d5,p5,r5,_,_ = get_binance_tf_signal(bin_symbol, "5m")
-    d15,p15,r15,_,_ = get_binance_tf_signal(bin_symbol, "15m")
     
-    if min(p1,p5,p15) == 0 and "NEUTRAL" in [d1,d5,d15]:
-        return "NO_TRADE", 0, f"⏳ Binance {bin_symbol} يحمل البيانات..."
+    if p1 == 0:
+        return "NO_TRADE", 0, f"⏳ {bin_symbol} جاري التحميل..."
     
-    # لازم كل الفريمات نفس الاتجاه
-    if d1==d5==d15 and d1 in ["BUY","SELL"]:
-        base = int(p1*0.45 + p5*0.35 + p15*0.20)  # 1m أهم
-        diff = max(p1,p5,p15) - min(p1,p5,p15)
-        if diff > 25: base -= 12
-        elif diff > 15: base -= 6
-        if min(p1,p5,p15) < 65: base -= 12
-        if min(p1,p5,p15) < 75: base -= 5
-        if r1 > 78 and d1=="BUY": base -= 10
-        if r1 < 22 and d1=="SELL": base -= 10
-        
-        base = max(0, min(96, base))
-        if base >= 82:
-            return d1, base, f"BINANCE OTC {bin_symbol} 1m:{p1}% 5m:{p5}% 15m:{p15}% | RSI:{int(r1)} - مباشر 24h"
+    # طلب ثاني 5m للتأكيد فقط لو الأول قوي
+    if p1 >= 70:
+        d5,p5,r5,_,_ = get_binance_tf_signal(bin_symbol, "5m")
+        # لو متفقين = قوي
+        if d1==d5 and d1 in ["BUY","SELL"]:
+            base = int(p1*0.6 + p5*0.4)
+            if r1>75 and d1=="BUY": base-=8
+            if r1<25 and d1=="SELL": base-=8
+            base = max(0, min(95, base))
+            if base >= 82:
+                return d1, base, f"BINANCE OTC {bin_symbol} 1m:{p1}% 5m:{p5}% | RSI:{int(r1)} - سريع 24h"
+            else:
+                return "NO_TRADE", base, f"⚠️ OTC ضعيف {base}% {bin_symbol}"
         else:
-            return "NO_TRADE", base, f"⚠️ BINANCE OTC ضعيف {base}% - {bin_symbol} | 1m:{p1}% 5m:{p5}% 15m:{p15}%"
-    
-    return "NO_TRADE", 0, f"❌ BINANCE OTC متذبذب {d1}/{d5}/{d15} - {bin_symbol} لا تدخل"
+            # 1m قوي بس 5m مختلف = متذبذب
+            return "NO_TRADE", 0, f"❌ متذبذب {bin_symbol} {d1}/{d5} - لا تدخل"
+    else:
+        # لو 1m ضعيف من البداية لا تطلب 5m
+        return "NO_TRADE", p1, f"⚠️ ضعيف {p1}% {bin_symbol} | RSI:{int(r1)} - انتظر"
 
 # كاش لتقليل طلبات TradingView
 signal_cache = {}
