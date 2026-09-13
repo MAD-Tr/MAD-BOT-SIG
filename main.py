@@ -1,4 +1,4 @@
-import os, time, threading, requests, math
+import os, time, threading, requests
 from flask import Flask, request, jsonify
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
@@ -36,32 +36,28 @@ MARKETS_OTC = {
 ALL_MARKETS = {**MARKETS_REAL, **MARKETS_OTC}
 authorized = set()
 
-# ========== BINANCE OTC ==========
-# خريطة OTC -> Binance (24 ساعة)
+# ===== BINANCE OTC (سريع 24h) =====
 BINANCE_OTC_MAP = {
-    "EURUSD": "EURUSDT",   # يورو
-    "GBPUSD": "GBPUSDT",   # باوند
-    "GBPJPY": "BTCUSDT",   # بديل متقلب للـ JPY
-    "EURJPY": "ETHUSDT",   # بديل متقلب
-    "AUDUSD": "AUDUSDT",   # استرالي موجود
-    "USDJPY": "BTCUSDT",   # بديل
-    "EURGBP": "EURUSDT",   # يورو
-    "USDCHF": "BNBUSDT",   # بديل
+    "EURUSD": "EURUSDT",
+    "GBPUSD": "GBPUSDT",
+    "GBPJPY": "BTCUSDT",
+    "EURJPY": "ETHUSDT",
+    "AUDUSD": "AUDUSDT",
+    "USDJPY": "BTCUSDT",
+    "EURGBP": "EURUSDT",
+    "USDCHF": "BNBUSDT",
 }
-
 BINANCE_CACHE = {}
-BINANCE_CACHE_TIME = 10  # كاش أسرع
+CACHE_TIME = 15
 
 def get_binance_klines(symbol, interval, limit=30):
-    """جيب شموع من Binance - سريع"""
     try:
         url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
-        r = requests.get(url, timeout=2.5)  # تايم أوت سريع
+        r = requests.get(url, timeout=3)
         if r.status_code != 200:
             return None
         data = r.json()
-        closes = [float(c[4]) for c in data]
-        return closes
+        return [float(c[4]) for c in data]
     except:
         return None
 
@@ -92,118 +88,77 @@ def calc_macd(prices):
         return 0, 0
     ema12 = calc_ema(prices, 12)
     ema26 = calc_ema(prices, 26)
-    macd = ema12 - ema26
-    # signal = EMA9 of MACD - نبسطها
-    # نحسب MACD line تاريخي بسيط
-    macd_history = []
-    for i in range(len(prices)):
-        if i < 26: continue
-        e12 = calc_ema(prices[:i+1], 12)
-        e26 = calc_ema(prices[:i+1], 26)
-        macd_history.append(e12-e26)
-    signal = calc_ema(macd_history[-20:], 9) if len(macd_history)>=9 else macd*0.9
-    return macd, signal
+    return ema12 - ema26, ema12*0.9
 
-def get_binance_tf_signal(symbol, interval_str):
-    """إشارة سريعة من Binance"""
-    cache_key = f"BN_{symbol}_{interval_str}"
+def get_binance_signal(symbol, interval_str):
+    key = f"{symbol}_{interval_str}"
     now = time.time()
-    if cache_key in BINANCE_CACHE:
-        t, d = BINANCE_CACHE[cache_key]
-        if now - t < BINANCE_CACHE_TIME:
+    if key in BINANCE_CACHE:
+        t, d = BINANCE_CACHE[key]
+        if now - t < CACHE_TIME:
             return d
-
     closes = get_binance_klines(symbol, interval_str, 30)
     if not closes or len(closes) < 20:
         return "NEUTRAL", 0, 50, 0, 0
-
     rsi = calc_rsi(closes, 14)
     macd, sig = calc_macd(closes)
-    
-    # تحديد الاتجاه
-    # RSI + EMA + MACD
-    ema_fast = calc_ema(closes, 9)
-    ema_slow = calc_ema(closes, 21)
+    ema9 = calc_ema(closes, 9)
+    ema21 = calc_ema(closes, 21)
     price = closes[-1]
-    
-    buy_score = 0
-    sell_score = 0
-    
-    if price > ema_fast: buy_score += 30
-    else: sell_score += 30
-    
-    if ema_fast > ema_slow: buy_score += 20
-    else: sell_score += 20
-    
-    if rsi > 50: buy_score += 25
-    else: sell_score += 25
-    
-    if macd > sig: buy_score += 25
-    else: sell_score += 25
-    
-    # قوة
-    total = buy_score + sell_score
-    if total == 0:
-        result = ("NEUTRAL", 50, rsi, macd, sig)
-    elif buy_score > sell_score:
-        strength = int((buy_score/total)*100)
-        # تعديل RSI
-        if rsi > 70: strength -= 15
-        if rsi > 80: strength -= 10
+    buy = 0
+    sell = 0
+    if price > ema9: buy+=30
+    else: sell+=30
+    if ema9 > ema21: buy+=20
+    else: sell+=20
+    if rsi > 50: buy+=25
+    else: sell+=25
+    if macd > sig: buy+=25
+    else: sell+=25
+    total = buy+sell
+    if buy > sell:
+        strength = int((buy/total)*100)
+        if rsi>70: strength-=15
         result = ("BUY", max(0,strength), rsi, macd, sig)
-    else:
-        strength = int((sell_score/total)*100)
-        if rsi < 30: strength -= 15
-        if rsi < 20: strength -= 10
+    elif sell > buy:
+        strength = int((sell/total)*100)
+        if rsi<30: strength-=15
         result = ("SELL", max(0,strength), rsi, macd, sig)
-    
-    BINANCE_CACHE[cache_key] = (now, result)
+    else:
+        result = ("NEUTRAL", 50, rsi, macd, sig)
+    BINANCE_CACHE[key] = (now, result)
     return result
 
-def get_strong_signal_otc_binance(symbol):
-    """إشارة OTC سريعة من Binance - فريم 1m+5m فقط عشان ما يعلق"""
-    bin_symbol = BINANCE_OTC_MAP.get(symbol, "BTCUSDT")
-    
-    # طلب واحد فقط 1m للسرعة
-    d1,p1,r1,_,_ = get_binance_tf_signal(bin_symbol, "1m")
-    
-    if p1 == 0:
-        return "NO_TRADE", 0, f"⏳ {bin_symbol} جاري التحميل..."
-    
-    # طلب ثاني 5m للتأكيد فقط لو الأول قوي
-    if p1 >= 70:
-        d5,p5,r5,_,_ = get_binance_tf_signal(bin_symbol, "5m")
-        # لو متفقين = قوي
+def get_otc_binance(symbol):
+    bsym = BINANCE_OTC_MAP.get(symbol, "BTCUSDT")
+    d1,p1,r1,_,_ = get_binance_signal(bsym, "1m")
+    if p1==0:
+        return "NO_TRADE", 0, f"⏳ {bsym} يحمل..."
+    if p1>=70:
+        d5,p5,r5,_,_ = get_binance_signal(bsym, "5m")
         if d1==d5 and d1 in ["BUY","SELL"]:
             base = int(p1*0.6 + p5*0.4)
-            if r1>75 and d1=="BUY": base-=8
-            if r1<25 and d1=="SELL": base-=8
-            base = max(0, min(95, base))
-            if base >= 82:
-                return d1, base, f"BINANCE OTC {bin_symbol} 1m:{p1}% 5m:{p5}% | RSI:{int(r1)} - سريع 24h"
+            if base>=82:
+                return d1, base, f"BINANCE {bsym} 1m:{p1}% 5m:{p5}% RSI:{int(r1)} - 24h"
             else:
-                return "NO_TRADE", base, f"⚠️ OTC ضعيف {base}% {bin_symbol}"
+                return "NO_TRADE", base, f"⚠️ ضعيف {base}% {bsym}"
         else:
-            # 1m قوي بس 5m مختلف = متذبذب
-            return "NO_TRADE", 0, f"❌ متذبذب {bin_symbol} {d1}/{d5} - لا تدخل"
+            return "NO_TRADE", 0, f"❌ متذبذب {bsym} {d1}/{d5}"
     else:
-        # لو 1m ضعيف من البداية لا تطلب 5m
-        return "NO_TRADE", p1, f"⚠️ ضعيف {p1}% {bin_symbol} | RSI:{int(r1)} - انتظر"
+        return "NO_TRADE", p1, f"⚠️ ضعيف {p1}% {bsym} RSI:{int(r1)}"
 
-# كاش لتقليل طلبات TradingView
-signal_cache = {}
-CACHE_TIME = 30  # ثانية
+# ===== TRADINGVIEW REAL =====
+TV_CACHE = {}
+TV_CACHE_TIME = 30
 
-def get_tf_signal_strong(symbol, interval):
-    cache_key = f"{symbol}_{interval}"
+def get_tv_tf(symbol, interval):
+    key = f"{symbol}_{interval}"
     now = time.time()
-    if cache_key in signal_cache:
-        cached_time, cached_data = signal_cache[cache_key]
-        if now - cached_time < CACHE_TIME:
-            return cached_data
-    
-    # إعادة محاولة 3 مرات مع تأخير
-    for attempt in range(3):
+    if key in TV_CACHE:
+        t,d = TV_CACHE[key]
+        if now-t < TV_CACHE_TIME:
+            return d
+    for attempt in range(2):
         try:
             h = TA_Handler(symbol=symbol, screener="forex", exchange="FX", interval=interval)
             a = h.get_analysis()
@@ -212,77 +167,60 @@ def get_tf_signal_strong(symbol, interval):
             rsi = ind.get('RSI', 50)
             macd = ind.get('MACD.macd', 0)
             sig = ind.get('MACD.signal', 0)
-            if s['BUY']+s['SELL']==0: 
+            if s['BUY']+s['SELL']==0:
                 result = ("NEUTRAL", 50, rsi, macd, sig)
-                signal_cache[cache_key] = (now, result)
+                TV_CACHE[key]=(now,result)
                 return result
             d = "BUY" if s['BUY']>s['SELL'] else "SELL"
             strength = int((max(s['BUY'],s['SELL'])/(s['BUY']+s['SELL']))*100)
-            if d=="BUY":
-                if rsi>70: strength-=15
-                if macd<sig: strength-=10
-            else:
-                if rsi<30: strength-=15
-                if macd>sig: strength-=10
+            if d=="BUY" and rsi>70: strength-=10
+            if d=="SELL" and rsi<30: strength-=10
             result = (d, max(0,strength), rsi, macd, sig)
-            signal_cache[cache_key] = (now, result)
+            TV_CACHE[key]=(now,result)
             return result
-        except Exception as e:
-            if attempt < 2:
-                time.sleep(0.8 + attempt*0.5)  # تأخير متزايد
-                continue
-            print(f"TV Error {symbol} {interval}: {e}")
-            # لا ترجع ERROR - رجع NEUTRAL عشان ما يظهر 0%
-            return "NEUTRAL", 0, 50, 0, 0
+        except:
+            time.sleep(0.5)
+            continue
     return "NEUTRAL", 0, 50, 0, 0
 
-def get_strong_signal_real(symbol):
-    d5,p5,r5,_,_ = get_tf_signal_strong(symbol, Interval.INTERVAL_5_MINUTES)
-    d15,p15,r15,_,_ = get_tf_signal_strong(symbol, Interval.INTERVAL_15_MINUTES)
-    d30,p30,r30,_,_ = get_tf_signal_strong(symbol, Interval.INTERVAL_30_MINUTES)
-    if "ERROR" in [d5,d15,d30] or "NEUTRAL" in [d5,d15,d30] and min(p5,p15,p30)==0:
-        # لو البيانات ما تحملت - حاول مرة ثانية
-        time.sleep(0.5)
-        d5,p5,r5,_,_ = get_tf_signal_strong(symbol, Interval.INTERVAL_5_MINUTES)
-        d15,p15,r15,_,_ = get_tf_signal_strong(symbol, Interval.INTERVAL_15_MINUTES)
-        if min(p5,p15,p30)==0:
-            return "NO_TRADE",0,"⏳ جاري تحميل بيانات TradingView - حاول مرة ثانية بعد 10 ثواني"
+def get_real_tv(symbol):
+    d5,p5,r5,_,_ = get_tv_tf(symbol, Interval.INTERVAL_5_MINUTES)
+    d15,p15,r15,_,_ = get_tv_tf(symbol, Interval.INTERVAL_15_MINUTES)
+    d30,p30,r30,_,_ = get_tv_tf(symbol, Interval.INTERVAL_30_MINUTES)
+    if min(p5,p15,p30)==0:
+        return "NO_TRADE",0,"⏳ TradingView يحمل..."
     if d5==d15==d30 and d5 in ["BUY","SELL"]:
         base=int(p5*0.25+p15*0.40+p30*0.35)
-        diff=max(p5,p15,p30)-min(p5,p15,p30)
-        if diff>25: base-=15
-        elif diff>15: base-=8
-        if min(p5,p15,p30)<60: base-=15
-        if min(p5,p15,p30)<70: base-=5
-        if d5=="BUY" and r15>75: base-=10
-        if d5=="SELL" and r15<25: base-=10
+        if min(p5,p15,p30)<70: base-=10
         base=max(0,min(95,base))
         if base>=78:
-            return d5,base,"TV REAL 5m:%s%% 15m:%s%% 30m:%s%% | RSI:%s - مباشر TradingView" % (p5,p15,p30,int(r15))
+            return d5,base,f"TV REAL 5m:{p5}% 15m:{p15}% 30m:{p30}% RSI:{int(r15)}"
         else:
-            return "NO_TRADE",base,"⚠️ إشارة ضعيفة %s%% - لا تدخل | 5m:%s%% 15m:%s%% 30m:%s%%" % (base,p5,p15,p30)
-    return "NO_TRADE",0,"❌ متضارب %s/%s/%s - لا تدخل" % (d5,d15,d30)
+            return "NO_TRADE",base,f"⚠️ ضعيف {base}%"
+    return "NO_TRADE",0,f"❌ متضارب {d5}/{d15}/{d30}"
+
+def get_strong_signal_real(symbol):
+    return get_real_tv(symbol)
 
 def get_strong_signal_otc(symbol):
-    # الآن OTC من Binance مباشر 24 ساعة
-    return get_strong_signal_otc_binance(symbol)
+    return get_otc_binance(symbol)
 
 def main_menu(chat_id):
     if not bot: return
     markup = InlineKeyboardMarkup(row_width=1)
     base_url = os.environ.get("RENDER_EXTERNAL_URL") or "https://mad-bot.onrender.com"
     webapp_url = base_url.rstrip("/") + "/mad"
-    markup.add(InlineKeyboardButton("💰 التطبيق المصغر - إشارات حقيقية", web_app=WebAppInfo(url=webapp_url)))
-    markup.add(InlineKeyboardButton("📉 حقيقي قوي 78%+", callback_data="all_real"))
-    markup.add(InlineKeyboardButton("🟡 OTC قوي 82%+", callback_data="all_otc"))
+    markup.add(InlineKeyboardButton("💰 التطبيق المصغر - TradingView + Binance", web_app=WebAppInfo(url=webapp_url)))
+    markup.add(InlineKeyboardButton("📉 حقيقي قوي 78%+ TradingView", callback_data="all_real"))
+    markup.add(InlineKeyboardButton("🟡 OTC قوي 82%+ Binance 24h", callback_data="all_otc"))
     markup.add(InlineKeyboardButton("🔥 أقوى فرصة الآن", callback_data="golden_strong"))
-    bot.send_message(chat_id, "✅ MAD BOT - إشارات TradingView حقيقية\nبدون عشوائي • مباشر\n⬇️ اختار", reply_markup=markup)
+    bot.send_message(chat_id, "✅ MAD BOT\nحقيقي: TradingView\nOTC: Binance 24h\n⬇️ اختار", reply_markup=markup)
 
 app = Flask(__name__)
 
 MAD_HTML = """
 <!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>MAD SIGNALS - TradingView Live</title><style>
+<title>MAD SIGNALS</title><style>
 *{box-sizing:border-box;margin:0;padding:0}body{background:radial-gradient(ellipse at top,#2a0000 0%,#000 80%);color:#fff;font-family:-apple-system,Arial;min-height:100vh;direction:rtl}
 .container{max-width:420px;margin:0 auto;padding:12px}.crown-wrap{display:flex;justify-content:center;margin:16px 0}.crown{width:100px;height:100px;background:radial-gradient(circle at 30% 30%,#ff3333,#7a0000);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:52px;box-shadow:0 0 40px rgba(255,0,0,.6)}
 .title{color:#ff0000;font-size:26px;font-weight:900;text-align:center;letter-spacing:3px;text-shadow:0 0 15px #ff0000}.subtitle{text-align:center;font-size:18px;font-weight:800;margin-top:4px}.sub2{text-align:center;color:#00ff00;font-size:10px;letter-spacing:1px;margin-top:6px}
@@ -298,8 +236,6 @@ MAD_HTML = """
 .item.strong{border-color:#00ff00;box-shadow:0 0 10px rgba(0,255,0,.15)}.item.weak{border-color:#333;opacity:.6}
 .hidden{display:none}.row{display:flex;gap:8px}.live-badge{display:flex;justify-content:space-between;background:#111;border:1px solid #222;border-radius:20px;padding:10px 16px;font-size:12px;margin:10px 0}
 .badge-buy{background:#00ff00;color:#000;padding:3px 10px;border-radius:20px;font-weight:900;font-size:11px}.badge-sell{background:#ff0000;color:#fff;padding:3px 10px;border-radius:20px;font-weight:900;font-size:11px}.badge-no{background:#333;color:#888;padding:3px 10px;border-radius:20px;font-size:11px}
-
-/* صندوق النتيجة الأسود الجديد */
 .result-box{background:#000;border:3px solid #222;border-radius:20px;padding:20px;margin:16px 0;text-align:center;box-shadow:0 0 30px rgba(0,0,0,.8)}
 .result-box.buy{border-color:#00ff00;box-shadow:0 0 30px rgba(0,255,0,.4), inset 0 0 20px rgba(0,255,0,.05)}
 .result-box.sell{border-color:#ff0000;box-shadow:0 0 30px rgba(255,0,0,.4), inset 0 0 20px rgba(255,0,0,.05)}
@@ -319,29 +255,29 @@ MAD_HTML = """
 <div class="container" id="screen1">
 <div class="crown-wrap"><div class="crown">👑</div></div>
 <div class="title">MAD SIGNALS</div>
-<div class="subtitle">TradingView مباشر</div>
-<div class="sub2">● LIVE • REAL DATA • NO RANDOM • STRONG ONLY</div>
+<div class="subtitle">REAL TradingView + OTC Binance</div>
+<div class="sub2">● REAL: TV 78%+ | OTC: Binance 82%+ 24h</div>
 <div class="card" style="margin-top:22px">
 <div style="font-size:13px;font-weight:700;margin-bottom:10px">اسمك</div>
 <div class="input-wrap"><input id="nameInput" maxlength="20" placeholder="اكتب اسمك المميز" oninput="onNameInput()"><span class="counter" id="counter">0/20</span></div>
 <button class="btn-main" id="enterBtn" onclick="enterApp()">🔥 ادخل كملك</button>
-<div style="text-align:center;color:#00ff00;font-size:11px;margin-top:10px">● مباشر من TradingView • 78%+ قوي فقط • بدون عشوائي</div>
+<div style="text-align:center;color:#00ff00;font-size:11px;margin-top:10px">● REAL: TradingView | OTC: Binance 24h</div>
 </div></div>
 <div class="container hidden" id="screen2">
 <div class="crown-wrap"><div class="crown" style="width:78px;height:78px;font-size:38px">👑</div></div>
 <div style="text-align:center;font-size:21px;font-weight:900">👑 أهلاً <span id="userName" style="color:#ff0000">محمد</span></div>
-<div class="sub2">● TradingView LIVE • إشارات حقيقية مباشرة</div>
+<div class="sub2">● REAL: TradingView | OTC: Binance 24h LIVE</div>
 <div class="live-badge"><span id="lastUpdate">آخر تحديث: --:--:--</span><span style="color:#ff0000" onclick="checkStrongOnly()">تحديث ↻</span></div>
 <div class="bank-card"><div style="font-size:11px;color:#888">البنوك الحقيقية • LIVE</div><div class="bank-time" id="countdown">00:00:00</div><div class="bank-status" id="bankStatus">جاري...</div><div style="font-size:10px;color:#666;margin-top:4px" id="bankNext"></div></div>
-<button class="btn-green" onclick="checkStrongOnly()">🎯 إشارات قوية فقط 78%+</button>
+<button class="btn-green" onclick="checkStrongOnly()">🎯 إشارات قوية فقط</button>
 <button class="btn-red" onclick="checkAllMarkets()">📊 فحص جميع الأسواق</button>
-<div class="card"><div style="font-weight:800;margin-bottom:10px">📊 فحص سوق واحد - مباشر قوي</div><div class="row"><select id="singleSelect" class="select">
+<div class="card"><div style="font-weight:800;margin-bottom:10px">📊 فحص سوق واحد</div><div class="row"><select id="singleSelect" class="select">
 <option>🇪🇺/🇺🇸 EUR/USD</option><option>🇬🇧/🇺🇸 GBP/USD</option><option>🇺🇸/🇯🇵 USD/JPY</option><option>🇦🇺/🇺🇸 AUD/USD</option><option>🇺🇸/🇨🇦 USD/CAD</option><option>🇪🇺/🇯🇵 EUR/JPY</option><option>🇨🇦/🇯🇵 CAD/JPY</option><option>🇪🇺/🇬🇧 EUR/GBP</option><option>🇦🇺/🇯🇵 AUD/JPY</option><option>🇳🇿/🇺🇸 NZD/USD</option><option>🇪🇺/🇨🇭 EUR/CHF</option><option>🇬🇧/🇯🇵 GBP/JPY</option><option>🇦🇺/🇨🇦 AUD/CAD</option><option>🇪🇺/🇦🇺 EUR/AUD</option><option>🇬🇧/🇨🇭 GBP/CHF</option><option>🇺🇸/🇨🇭 USD/CHF</option><option>🇪🇺/🇨🇦 EUR/CAD</option><option>🇦🇺/🇨🇭 AUD/CHF</option><option>🇬🇧/🇦🇺 GBP/AUD</option>
 <option>🟡 🇪🇺/🇺🇸 EUR/USD OTC</option><option>🟡 🇬🇧/🇺🇸 GBP/USD OTC</option><option>🟡 🇬🇧/🇯🇵 GBP/JPY OTC</option><option>🟡 🇪🇺/🇯🇵 EUR/JPY OTC</option><option>🟡 🇦🇺/🇺🇸 AUD/USD OTC</option><option>🟡 🇺🇸/🇯🇵 USD/JPY OTC</option><option>🟡 🇪🇺/🇬🇧 EUR/GBP OTC</option><option>🟡 🇺🇸/🇨🇭 USD/CHF OTC</option>
 </select><button class="btn-small" onclick="checkSingle()">فحص قوي</button></div>
 <div id="singleResult"></div>
 </div>
-<div class="tabs"><button class="tab active" id="tabReal" onclick="switchTab('real')">حقيقي قوي 78%+ (19)</button><button class="tab" id="tabOtc" onclick="switchTab('otc')">OTC قوي 82%+ (8)</button></div>
+<div class="tabs"><button class="tab active" id="tabReal" onclick="switchTab('real')">حقيقي TradingView (19)</button><button class="tab" id="tabOtc" onclick="switchTab('otc')">OTC Binance 24h (8)</button></div>
 <div id="realList" class="list"></div><div id="otcList" class="list hidden"></div>
 </div>
 <script>
@@ -353,7 +289,6 @@ function switchTab(t){document.getElementById('tabReal').className=t=='real'?'ta
 const realPairs=["🇪🇺/🇺🇸 EUR/USD","🇬🇧/🇺🇸 GBP/USD","🇺🇸/🇯🇵 USD/JPY","🇦🇺/🇺🇸 AUD/USD","🇺🇸/🇨🇦 USD/CAD","🇪🇺/🇯🇵 EUR/JPY","🇨🇦/🇯🇵 CAD/JPY","🇪🇺/🇬🇧 EUR/GBP","🇦🇺/🇯🇵 AUD/JPY","🇳🇿/🇺🇸 NZD/USD","🇪🇺/🇨🇭 EUR/CHF","🇬🇧/🇯🇵 GBP/JPY","🇦🇺/🇨🇦 AUD/CAD","🇪🇺/🇦🇺 EUR/AUD","🇬🇧/🇨🇭 GBP/CHF","🇺🇸/🇨🇭 USD/CHF","🇪🇺/🇨🇦 EUR/CAD","🇦🇺/🇨🇭 AUD/CHF","🇬🇧/🇦🇺 GBP/AUD"];
 const otcPairs=["🟡 🇪🇺/🇺🇸 EUR/USD OTC","🟡 🇬🇧/🇺🇸 GBP/USD OTC","🟡 🇬🇧/🇯🇵 GBP/JPY OTC","🟡 🇪🇺/🇯🇵 EUR/JPY OTC","🟡 🇦🇺/🇺🇸 AUD/USD OTC","🟡 🇺🇸/🇯🇵 USD/JPY OTC","🟡 🇪🇺/🇬🇧 EUR/GBP OTC","🟡 🇺🇸/🇨🇭 USD/CHF OTC"];
 let candleTimer=null;
-
 function loadMarkets(){
   let r=document.getElementById('realList');r.innerHTML='';
   realPairs.forEach(function(p){
@@ -383,17 +318,11 @@ async function fetchSignal(pair, strong){
 }
 function getNextCandleSeconds(isOtc){
   let now=new Date();
-  if(isOtc){
-    // OTC 1 دقيقة - كل دقيقة شمعة جديدة
-    return 60 - now.getSeconds();
-  }else{
-    // حقيقي 15m - كل 15 دقيقة: 00,15,30,45
-    let m=now.getMinutes();
-    let s=now.getSeconds();
-    let nextM=Math.ceil((m+1)/15)*15;
-    let diffM=nextM - m -1;
-    if(diffM<0) diffM+=15;
-    return diffM*60 + (60 - s);
+  if(isOtc) return 60 - now.getSeconds();
+  else{
+    let m=now.getMinutes();let s=now.getSeconds();
+    let nextM=Math.ceil((m+1)/15)*15;let diffM=nextM - m -1;
+    if(diffM<0) diffM+=15;return diffM*60 + (60 - s);
   }
 }
 function startCandleCountdown(isOtc){
@@ -405,73 +334,50 @@ function startCandleCountdown(isOtc){
     let el=document.getElementById('candleCountdown');
     if(el){
       el.innerText=mm+':'+ss;
-      if(sec<=10){el.style.color='#ff0000';el.style.textShadow='0 0 20px #ff0000';}
-      else if(sec<=30){el.style.color='#ffcc00';el.style.textShadow='0 0 15px #ffcc00';}
+      if(sec<=10){el.style.color='#ff0000';}
+      else if(sec<=30){el.style.color='#ffcc00';}
       else{el.style.color='#00ff00';}
-      if(sec<=3 && sec>0){
-        el.innerText='🔥 ادخل الآن! 00:0'+sec;
-      }
+      if(sec<=3 && sec>0) el.innerText='🔥 ادخل الآن! 00:0'+sec;
     }
-    if(sec<=0){
-      clearInterval(candleTimer);
-      // مع بداية شمعة جديدة - نحدث الإشارة تلقائي
-      let pair=document.getElementById('singleSelect').value;
-      if(pair) setTimeout(function(){checkSingle();}, 1500);
-    }
+    if(sec<=0){clearInterval(candleTimer);let pair=document.getElementById('singleSelect').value;if(pair) setTimeout(function(){checkSingle();},1500);}
   }
-  update();
-  candleTimer=setInterval(update, 1000);
+  update();candleTimer=setInterval(update,1000);
 }
 async function checkSingle(){
   let pair=document.getElementById('singleSelect').value;
   let isOtc=pair.indexOf('OTC')!==-1;
   let resDiv=document.getElementById('singleResult');
-  resDiv.innerHTML='<div style="text-align:center;padding:20px;color:#888">⏳ يحلل '+pair+' من TradingView مباشر...</div>';
-  // ينزل تحت تلقائي
-  setTimeout(function(){resDiv.scrollIntoView({behavior:'smooth',block:'center'});}, 200);
-  
+  let source=isOtc ? 'Binance 24h' : 'TradingView';
+  resDiv.innerHTML='<div style="text-align:center;padding:20px;color:#888">⏳ يحلل '+pair+' من '+source+'...</div>';
+  setTimeout(function(){resDiv.scrollIntoView({behavior:'smooth',block:'center'});},200);
   let data=await fetchSignal(pair, true);
-  
-  // ينزل تحت مرة ثانية بعد النتيجة
-  setTimeout(function(){resDiv.scrollIntoView({behavior:'smooth',block:'center'});}, 100);
-  
   if(data.dir=='NO_TRADE'){
-    resDiv.innerHTML='<div class="result-box no">'
-      +'<div class="result-pair">'+pair+'</div>'
-      +'<div class="result-dir no">⛔ لا تدخل</div>'
-      +'<div class="result-percent" style="color:#888">'+data.accuracy+'% ضعيف</div>'
-      +'<div class="result-detail">'+data.detail+'</div>'
-      +'<div class="countdown-box"><div class="countdown-label">انتظر الشمعة القادمة</div><div id="candleCountdown" class="countdown-time">--:--</div><div class="countdown-hint">السوق متذبذب - لا تدخل الآن</div></div>'
-      +'</div>';
+    resDiv.innerHTML='<div class="result-box no"><div class="result-pair">'+pair+' • '+source+'</div><div class="result-dir no">⛔ لا تدخل</div><div class="result-percent" style="color:#888">'+data.accuracy+'% ضعيف</div><div class="result-detail">'+data.detail+'</div><div class="countdown-box"><div class="countdown-label">انتظر الشمعة القادمة</div><div id="candleCountdown" class="countdown-time">--:--</div><div class="countdown-hint">السوق متذبذب</div></div></div>';
   }else{
     let isBuy=data.dir.indexOf('BUY')!==-1;
-    let boxClass=isBuy?'buy':'sell';
-    let dirClass=isBuy?'buy':'sell';
-    let dirText=isBuy?'BUY ↗️':'SELL ↘️';
-    let dirEmoji=isBuy?'🟢':'🔴';
-    let bgColor=isBuy?'#00ff00':'#ff0000';
-    resDiv.innerHTML='<div class="result-box '+boxClass+'">'
-      +'<div class="result-pair">'+pair+' • TradingView LIVE</div>'
-      +'<div class="result-dir '+dirClass+'">'+dirEmoji+' '+dirText+'</div>'
-      +'<div class="result-percent">'+data.dir_formatted+'</div>'
-      +'<div class="result-detail">'+data.detail+'<br>● مباشر من TradingView • حقيقي 100%</div>'
-      +'<div class="countdown-box"><div class="countdown-label">⏰ عداد الشمعة الجديدة - استعد للدخول</div><div id="candleCountdown" class="countdown-time">00:00</div><div class="countdown-hint">ادخل مع بداية الشمعة الجديدة • '+(isOtc?'OTC 1 دقيقة':'حقيقي 15 دقيقة')+'</div></div>'
-      +'</div>';
+    let boxClass=isBuy?'buy':'sell';let dirClass=isBuy?'buy':'sell';
+    let dirText=isBuy?'BUY ↗️':'SELL ↘️';let dirEmoji=isBuy?'🟢':'🔴';
+    resDiv.innerHTML='<div class="result-box '+boxClass+'"><div class="result-pair">'+pair+' • '+source+'</div><div class="result-dir '+dirClass+'">'+dirEmoji+' '+dirText+'</div><div class="result-percent">'+data.dir_formatted+'</div><div class="result-detail">'+data.detail+'<br>● '+(isOtc ? 'Binance 24h' : 'TradingView')+'</div><div class="countdown-box"><div class="countdown-label">⏰ عداد الشمعة الجديدة</div><div id="candleCountdown" class="countdown-time">00:00</div><div class="countdown-hint">'+(isOtc ? 'OTC 1 دقيقة' : 'حقيقي 15 دقيقة')+'</div></div></div>';
   }
   startCandleCountdown(isOtc);
 }
 async function checkStrongOnly(){
   let btn=document.querySelector('.btn-green');
-  if(btn){btn.innerText='⏳ يفحص القوي من TradingView...';btn.disabled=true;}
-  let all=realPairs.concat(otcPairs);
-  let strongCount=0;
-  let promises=all.map(async function(p){
+  let isOtcTab=document.getElementById('tabOtc').classList.contains('active');
+  if(btn){
+    btn.innerText=isOtcTab ? '⏳ يفحص OTC من Binance...' : '⏳ يفحص TradingView...';
+    btn.disabled=true;
+  }
+  let all=isOtcTab ? otcPairs : realPairs;
+  if(!isOtcTab) all=realPairs.concat(otcPairs);
+  // للسرعة نفحص 5 أسواق فقط في كل مرة
+  let promises=all.slice(0,8).map(async function(p){
     try{let d=await fetchSignal(p,true);return {pair:p,data:d};}catch(e){return {pair:p,data:null};}
   });
   let results=await Promise.all(promises);
+  let strongCount=0;
   results.forEach(function(r){
-    let p=r.pair;let d=r.data;
-    if(!d) return;
+    let p=r.pair;let d=r.data;if(!d) return;
     let id=(p.indexOf('OTC')!==-1?'o_':'r_')+p;
     let el=document.getElementById(id);
     if(el){
@@ -479,44 +385,43 @@ async function checkStrongOnly(){
       else{el.innerText=d.dir_formatted;el.className=d.dir.indexOf('BUY')!==-1?'badge-buy':'badge-sell';el.parentElement.parentElement.className='item strong';strongCount++;}
     }
   });
-  document.getElementById('lastUpdate').innerText='✅ قوي TradingView: '+strongCount+' / '+all.length+' • '+new Date().toLocaleTimeString('ar-SA');
-  if(btn){btn.innerText='🎯 إشارات قوية TradingView ('+strongCount+')';btn.disabled=false;}
+  document.getElementById('lastUpdate').innerText='✅ قوي: '+strongCount+' / '+all.length+' • '+new Date().toLocaleTimeString('ar-SA');
+  if(btn){btn.innerText='🎯 إشارات قوية فقط ('+strongCount+')';btn.disabled=false;}
 }
 async function checkAllMarkets(){
   let btn=document.querySelector('.btn-red');
-  if(btn){btn.innerText='⏳ فحص TradingView...';btn.disabled=true;}
+  if(btn){btn.innerText='⏳ فحص TradingView + Binance...';btn.disabled=true;}
   let all=realPairs.concat(otcPairs);
-  let promises=all.map(async function(p){
-    try{let d=await fetchSignal(p,false);return {pair:p,data:d};}catch(e){return {pair:p,data:null};}
-  });
-  let results=await Promise.all(promises);
-  results.forEach(function(r){
-    let p=r.pair;let d=r.data;
-    if(!d) return;
-    let id=(p.indexOf('OTC')!==-1?'o_':'r_')+p;
-    let el=document.getElementById(id);
-    if(el){
-      if(d.dir=='NO_TRADE'){el.innerText='⛔ لا تدخل';el.className='badge-no';}
-      else{el.innerText=d.dir_formatted;el.className=d.dir.indexOf('BUY')!==-1?'badge-buy':'badge-sell';}
-    }
-  });
-  document.getElementById('lastUpdate').innerText='آخر تحديث TradingView: '+new Date().toLocaleTimeString('ar-SA');
+  for(let i=0;i<all.length;i+=4){
+    let batch=all.slice(i,i+4);
+    let promises=batch.map(async function(p){try{let d=await fetchSignal(p,false);return {pair:p,data:d};}catch(e){return {pair:p,data:null};}});
+    let results=await Promise.all(promises);
+    results.forEach(function(r){
+      let p=r.pair;let d=r.data;if(!d) return;
+      let id=(p.indexOf('OTC')!==-1?'o_':'r_')+p;
+      let el=document.getElementById(id);
+      if(el){
+        if(d.dir=='NO_TRADE'){el.innerText='⛔ لا تدخل';el.className='badge-no';}
+        else{el.innerText=d.dir_formatted;el.className=d.dir.indexOf('BUY')!==-1?'badge-buy':'badge-sell';}
+      }
+    });
+    await new Promise(res=>setTimeout(res,800));
+  }
+  document.getElementById('lastUpdate').innerText='آخر تحديث: '+new Date().toLocaleTimeString('ar-SA');
   if(btn){btn.innerText='📊 فحص جميع الأسواق';btn.disabled=false;}
 }
 function updateClock(){
   function tick(){
-    let now=new Date();
-    let ny=new Date(now.toLocaleString("en-US",{timeZone:"America/New_York"}));
+    let now=new Date();let ny=new Date(now.toLocaleString("en-US",{timeZone:"America/New_York"}));
     let h=ny.getHours();let target,status;
     if(h>=20||h<2){target=2;status="🌙 آسيا";}else if(h>=2&&h<7){target=7;status="🇬🇧 لندن";}else if(h>=7&&h<12){status="🔥 لندن+نيويورك TOP";target=20;}else{status="🇺🇸 نيويورك";target=20;}
     let t=new Date(ny);t.setHours(target,0,0,0);if(t<=ny)t.setDate(t.getDate()+1);
-    let diff=t-ny;
-    let hh=String(Math.floor(diff/1000/3600)).padStart(2,'0');
+    let diff=t-ny;let hh=String(Math.floor(diff/1000/3600)).padStart(2,'0');
     let mm=String(Math.floor((diff/1000%3600)/60)).padStart(2,'0');
     let ss=String(Math.floor(diff/1000%60)).padStart(2,'0');
     document.getElementById('countdown').innerText=hh+':'+mm+':'+ss;
     document.getElementById('bankStatus').innerText=status;
-    document.getElementById('bankNext').innerText=status+' تفتح بعد: '+hh+':'+mm+':'+ss+' • LIVE TradingView';
+    document.getElementById('bankNext').innerText=status+' تفتح بعد: '+hh+':'+mm+':'+ss;
   }
   tick();setInterval(tick,1000);
 }
@@ -525,7 +430,7 @@ if(saved&&saved.length>=2)enterApp();
 """
 
 @app.route('/')
-def home(): return "MAD BOT TradingView Strong - No Random"
+def home(): return "MAD BOT - TradingView REAL + Binance OTC"
 @app.route('/mad')
 def mad(): return MAD_HTML
 @app.route('/health')
@@ -534,7 +439,6 @@ def health(): return "OK"
 @app.route('/signal')
 def signal_api():
     pair = request.args.get('pair','EUR/USD')
-    strong_mode = request.args.get('strong','0') == '1'
     clean = pair
     for flag in ["🇪🇺/🇺🇸 ","🇬🇧/🇺🇸 ","🇺🇸/🇯🇵 ","🇦🇺/🇺🇸 ","🇺🇸/🇨🇦 ","🇪🇺/🇯🇵 ","🇨🇦/🇯🇵 ","🇪🇺/🇬🇧 ","🇦🇺/🇯🇵 ","🇳🇿/🇺🇸 ","🇪🇺/🇨🇭 ","🇬🇧/🇯🇵 ","🇦🇺/🇨🇦 ","🇪🇺/🇦🇺 ","🇬🇧/🇨🇭 ","🇺🇸/🇨🇭 ","🇪🇺/🇨🇦 ","🇦🇺/🇨🇭 ","🇬🇧/🇦🇺 ","🟡 "," OTC"]:
         clean = clean.replace(flag,"")
@@ -552,22 +456,15 @@ def signal_api():
             min_strong = 78
         is_strong = p >= min_strong and d != "NO_TRADE"
         if d == "NO_TRADE":
-            return jsonify({"dir": "NO_TRADE", "dir_formatted": "⛔ لا تدخل", "accuracy": p, "detail": det, "tf": "10s" if is_otc else "15m", "pair": pair, "is_strong": False})
-        if d == "BUY":
-            dir_fmt = "🟢 BUY ↗️ %s%%" % p
-            dir_plain = "BUY"
-        else:
-            dir_fmt = "🔴 SELL ↘️ %s%%" % p
-            dir_plain = "SELL"
-        tf = "OTC 1m+5m+15m TradingView" if is_otc else "REAL 5m+15m+30m TradingView"
-        return jsonify({"dir": dir_plain, "dir_formatted": dir_fmt, "accuracy": p, "detail": det, "tf": tf, "pair": pair, "is_strong": is_strong})
+            return jsonify({"dir": "NO_TRADE", "dir_formatted": "⛔ لا تدخل", "accuracy": p, "detail": det, "tf": "Binance" if is_otc else "TV", "pair": pair, "is_strong": False})
+        dir_fmt = f"🟢 BUY ↗️ {p}%" if d=="BUY" else f"🔴 SELL ↘️ {p}%"
+        return jsonify({"dir": d, "dir_formatted": dir_fmt, "accuracy": p, "detail": det, "tf": "Binance 24h" if is_otc else "TV REAL", "pair": pair, "is_strong": is_strong})
     except Exception as e:
         return jsonify({"dir": "NO_TRADE", "dir_formatted": "❌ خطأ", "accuracy": 0, "detail": str(e), "tf": "error", "pair": pair, "is_strong": False})
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     print(f"Starting Flask on port {port}")
-    # Render يحتاج 0.0.0.0 و debug=False
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
 if bot:
@@ -588,23 +485,23 @@ if bot:
             bot.send_message(m.chat.id, "❌")
     @bot.callback_query_handler(func=lambda c: c.data=="all_real")
     def cb_all_real(call):
-        ld = bot.send_message(call.message.chat.id, "⏳ افحص الحقيقي القوي TradingView...")
+        ld = bot.send_message(call.message.chat.id, "⏳ TradingView الحقيقي...")
         strong=[]
         for n,s in MARKETS_REAL.items():
             d,p,det = get_strong_signal_real(s)
             if d!="NO_TRADE" and p>=78: strong.append((p,n,d,p,det))
         strong.sort(reverse=True, key=lambda x:x[0])
         if not strong:
-            bot.edit_message_text("⛔ لا يوجد إشارات قوية TradingView الآن\nكل الأسواق متذبذبة", call.message.chat.id, ld.message_id)
+            bot.edit_message_text("⛔ لا يوجد إشارات قوية الآن", call.message.chat.id, ld.message_id)
         else:
-            text="🔥 إشارات قوية حقيقية TradingView 78%+\n━━━━━━━━━━━━\n"
+            text="🔥 TradingView 78%+\n"
             for p,n,d,pp,det in strong[:5]:
                 emoji="🟢 BUY ↗️" if d=="BUY" else "🔴 SELL ↘️"
-                text+="%s %s %s%%\n%s\n\n" % (n, emoji, pp, det)
+                text+=f"{n} {emoji} {pp}%\n{det}\n\n"
             bot.edit_message_text(text, call.message.chat.id, ld.message_id)
     @bot.callback_query_handler(func=lambda c: c.data=="all_otc")
     def cb_all_otc(call):
-        ld = bot.send_message(call.message.chat.id, "⏳ افحص OTC القوي TradingView...")
+        ld = bot.send_message(call.message.chat.id, "⏳ Binance OTC...")
         strong=[]
         for n,s in MARKETS_OTC.items():
             d,p,det = get_strong_signal_otc(s)
@@ -613,40 +510,11 @@ if bot:
         if not strong:
             bot.edit_message_text("⛔ لا يوجد OTC قوي الآن", call.message.chat.id, ld.message_id)
         else:
-            text="🟡 OTC قوي TradingView 82%+\n━━━━━━━━━━━━\n"
+            text="🟡 Binance OTC 82%+\n"
             for p,n,d,pp,det in strong[:5]:
                 emoji="🟢 BUY ↗️" if d=="BUY" else "🔴 SELL ↘️"
-                text+="%s %s %s%%\n%s\n\n" % (n, emoji, pp, det)
+                text+=f"{n} {emoji} {pp}%\n{det}\n\n"
             bot.edit_message_text(text, call.message.chat.id, ld.message_id)
-    @bot.callback_query_handler(func=lambda c: c.data=="golden_strong")
-    def cb_golden_strong(call):
-        ld = bot.send_message(call.message.chat.id, "⏳ أقوى فرصة TradingView...")
-        all_strong=[]
-        for n,s in ALL_MARKETS.items():
-            is_otc = "OTC" in n
-            if is_otc:
-                d,p,det = get_strong_signal_otc(s)
-                if p>=82 and d!="NO_TRADE": all_strong.append((p,n,d,p,det))
-            else:
-                d,p,det = get_strong_signal_real(s)
-                if p>=78 and d!="NO_TRADE": all_strong.append((p,n,d,p,det))
-        all_strong.sort(reverse=True, key=lambda x:x[0])
-        if not all_strong:
-            bot.edit_message_text("⛔ لا يوجد فرص قوية الآن", call.message.chat.id, ld.message_id)
-        else:
-            p,n,d,pp,det = all_strong[0]
-            emoji="🟢 BUY ↗️" if d=="BUY" else "🔴 SELL ↘️"
-            bot.edit_message_text("🔥🔥 أقوى فرصة TradingView %s%%\n%s\n%s\n\n%s\n\n✅ مباشر وقوي" % (pp, n, emoji, det), call.message.chat.id, ld.message_id)
-    @bot.callback_query_handler(func=lambda c: c.data.startswith("s_"))
-    def cb_s(call):
-        n = call.data[2:]
-        is_otc = "OTC" in n
-        if is_otc: d,p,det = get_strong_signal_otc(ALL_MARKETS[n])
-        else: d,p,det = get_strong_signal_real(ALL_MARKETS[n])
-        if d=="NO_TRADE": bot.send_message(call.message.chat.id, "⛔ %s\n%s" % (n, det))
-        else:
-            emoji="🟢 BUY ↗️" if d=="BUY" else "🔴 SELL ↘️"
-            bot.send_message(call.message.chat.id, "%s\n%s %s%%\n%s" % (n, emoji, p, det))
 
 def run_bot():
     if not bot: return
@@ -655,24 +523,19 @@ def run_bot():
         time.sleep(1)
         bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=60)
     except Exception as e:
-        print("Bot error: %s" % e)
+        print(f"Bot error: {e}")
         time.sleep(5)
         run_bot()
 
 if __name__ == "__main__":
-    # شغل البوت في ثريد منفصل - لو طاح الفلاسك يبقى شغال
     try:
         if bot:
             threading.Thread(target=run_bot, daemon=True).start()
             print("Bot thread started")
     except Exception as e:
-        print(f"Bot thread failed to start: {e}")
-    
-    # شغل الفلاسك - هذا لازم يبقى شغال
+        print(f"Bot thread failed: {e}")
     try:
         run_flask()
     except Exception as e:
         print(f"Flask failed: {e}")
-        # حتى لو فشل الفلاسك، لا تخرج بسرعة
-        import time
         time.sleep(10)
