@@ -2,4 +2,3 @@ pyTelegramBotAPI
 tradingview-ta
 Flask
 requests
-python-dotenv
