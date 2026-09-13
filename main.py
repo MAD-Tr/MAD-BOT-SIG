@@ -1,4 +1,9 @@
-
+"""
+M2NRU LEGENDARY HYBRID BOT - Pocket Option
+Real Markets from TradingView + OTC Markets from Binance
+Token: 8828337019:AAHgUTyjrxMk7IkJpMZzseKbroltKInaCes
+Secret: 7154
+"""
 import requests, time, threading, os
 import pandas as pd
 from flask import Flask, request
