@@ -1,213 +1,179 @@
-"""
-M2NRU LEGENDARY HYBRID BOT - Pocket Option
-Real Markets from TradingView + OTC Markets from Binance
-Token: 8828337019:AAHgUTyjrxMk7IkJpMZzseKbroltKInaCes
-Secret: 7154
-"""
-import requests, time, threading, os
-import pandas as pd
-from flask import Flask, request
-from datetime import datetime
+import os
+import time
+import threading
+from flask import Flask
+import telebot
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from tradingview_ta import TA_Handler, Interval
 
-app = Flask(__name__)
+TOKEN = os.environ.get("TOKEN") or "8828337019:AAHgUTyjrxMk7IkJpMZzseKbroltKInaCes"
+PASSWORD = os.environ.get("PASSWORD") or "7154"
+bot = telebot.TeleBot(TOKEN, threaded=False)
 
-# ========== الإعدادات ==========
-BOT_TOKEN = "8828337019:AAHgUTyjrxMk7IkJpMZzseKbroltKInaCes"
-CHAT_ID = "YOUR_CHAT_ID" # روح ل @userinfobot وجيب الايدي حقك وحطه هنا
-SECRET_KEY = "7154"
-
-# جميع الأسواق الحقيقية في بوكت أوبشن
-REAL_MARKETS = [
-    "🇪🇺/🇺🇸 EUR/USD", "🇬🇧/🇺🇸 GBP/USD", "🇺🇸/🇯🇵 USD/JPY", "🇦🇺/🇺🇸 AUD/USD",
-    "🇺🇸/🇨🇦 USD/CAD", "🇺🇸/🇨🇭 USD/CHF", "🇪🇺/🇯🇵 EUR/JPY", "🇬🇧/🇯🇵 GBP/JPY",
-    "🇪🇺/🇬🇧 EUR/GBP", "🇦🇺/🇯🇵 AUD/JPY", "🇪🇺/🇦🇺 EUR/AUD", "🇬🇧/🇦🇺 GBP/AUD",
-    "🇪🇺/🇨🇦 EUR/CAD", "🇳🇿/🇺🇸 NZD/USD", "🇪🇺/🇨🇭 EUR/CHF", "🇬🇧/🇨🇭 GBP/CHF",
-    "💰 XAU/USD (ذهب)", "💰 XAG/USD (فضة)", "🛢️ USOIL", "₿ BTC/USD", "Ξ ETH/USD"
-]
-
-# جميع أسواق OTC
-OTC_MARKETS_LIST = [
-    "🇪🇺/🇺🇸 EUR/USD (OTC)", "🇬🇧/🇺🇸 GBP/USD (OTC)", "🇺🇸/🇯🇵 USD/JPY (OTC)",
-    "🇦🇺/🇺🇸 AUD/USD (OTC)", "🇺🇸/🇨🇭 USD/CHF (OTC)", "🇪🇺/🇯🇵 EUR/JPY (OTC)",
-    "🇬🇧/🇯🇵 GBP/JPY (OTC)", "🇦🇺/🇯🇵 AUD/JPY (OTC)", "🇪🇺/🇬🇧 EUR/GBP (OTC)",
-    "🇳🇿/🇺🇸 NZD/USD (OTC)", "🇪🇺/🇦🇺 EUR/AUD (OTC)", "🇬🇧/🇦🇺 GBP/AUD (OTC)",
-    "🇺🇸/🇨🇦 USD/CAD (OTC)", "💵/🇲🇽 USD/MXN (OTC)", "₿ BTC/USD (OTC)",
-    "Ξ ETH/USD (OTC)", "🪙 BNB/USD (OTC)", "🪙 SOL/USD (OTC)"
-]
-
-# ربط الـ OTC مع بينانس
-OTC_BINANCE_MAP = {
-    "EUR/USD (OTC)": "EURUSDT",
-    "GBP/USD (OTC)": "GBPUSDT", 
-    "USD/JPY (OTC)": "BTCUSDT", # نستخدم BTC كمحرك قوي للـ OTC
-    "AUD/USD (OTC)": "AUDUSDT",
-    "USD/CHF (OTC)": "ETHUSDT",
-    "EUR/JPY (OTC)": "EURUSDT",
-    "GBP/JPY (OTC)": "GBPUSDT",
-    "AUD/JPY (OTC)": "AUDUSDT",
-    "BTC/USD (OTC)": "BTCUSDT",
-    "ETH/USD (OTC)": "ETHUSDT",
+MARKETS = {
+    "🇪🇺/🇺🇸 EUR/USD": "EURUSD", "🇬🇧/🇺🇸 GBP/USD": "GBPUSD", "🇺🇸/🇯🇵 USD/JPY": "USDJPY",
+    "🇦🇺/🇺🇸 AUD/USD": "AUDUSD", "🇺🇸/🇨🇦 USD/CAD": "USDCAD", "🇪🇺/🇯🇵 EUR/JPY": "EURJPY",
+    "🇨🇦/🇯🇵 CAD/JPY": "CADJPY", "🇪🇺/🇬🇧 EUR/GBP": "EURGBP", "🇦🇺/🇯🇵 AUD/JPY": "AUDJPY",
+    "🇳🇿/🇺🇸 NZD/USD": "NZDUSD", "🇪🇺/🇨🇭 EUR/CHF": "EURCHF", "🇬🇧/🇯🇵 GBP/JPY": "GBPJPY",
+    "🇦🇺/🇨🇦 AUD/CAD": "AUDCAD", "🇪🇺/🇦🇺 EUR/AUD": "EURAUD", "🇬🇧/🇨🇭 GBP/CHF": "GBPCHF",
+    "🇺🇸/🇨🇭 USD/CHF": "USDCHF", "🇪🇺/🇨🇦 EUR/CAD": "EURCAD", "🇦🇺/🇨🇭 AUD/CHF": "AUDCHF",
+    "🇬🇧/🇦🇺 GBP/AUD": "GBPAUD", "🇨🇦/🇨🇭 CAD/CHF": "CADCHF", "🇪🇺/🇳🇿 EUR/NZD": "EURNZD",
+    "🇬🇧/🇳🇿 GBP/NZD": "GBPNZD",
 }
 
-BINANCE_SYMBOLS_TO_WATCH = ["BTCUSDT", "ETHUSDT", "EURUSDT", "GBPUSDT", "AUDUSDT", "BNBUSDT", "SOLUSDT"]
+user_data = {}
+last_request = {}
+authorized = set()
 
-TIMEFRAME = "1m"
-COOLDOWN = 120
-last_signal_time = {}
-user_settings = {"mode": "ALL"} # ALL, REAL, OTC
-
-def get_telegram_keyboard():
-    return {
-        "inline_keyboard": [
-            [{"text": "🟢 تفعيل الأسواق الحقيقية فقط", "callback_data": "mode_REAL"},
-             {"text": "🔵 تفعيل أسواق OTC فقط", "callback_data": "mode_OTC"}],
-            [{"text": "👑 تفعيل الكل (أسطوري)", "callback_data": "mode_ALL"}],
-            [{"text": "📊 حالة البوت", "callback_data": "status"}]
-        ]
-    }
-
-def send_telegram(pair, action, source, price, rsi_val, market_flag="REAL"):
-    # فلترة حسب اختيار المستخدم
-    if user_settings["mode"] == "REAL" and market_flag == "OTC":
-        return
-    if user_settings["mode"] == "OTC" and market_flag == "REAL":
-        return
-
-    if action == "BUY":
-        direction = "🟢 صعود - CALL"
-        color = "🟢🟢🟢"
-    else:
-        direction = "🔴 هبوط - PUT"
-        color = "🔴🔴🔴"
-
-    market_type = "سوق حقيقي REAL" if market_flag == "REAL" else "سوق OTC"
-
-    msg = f"""
-{color}
-**إشارة {market_type} وصلت!**
-
-{pair}
-📊 الاتجاه: **{direction}**
-💰 السعر: `{price}`
-📈 RSI: `{rsi_val}`
-🏦 المصدر: `{source}`
-⏰ المدة: 1M - 3M
-
-⚡️ **ادخل الآن في Pocket Option**
-"""
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    keyboard = {
-        "inline_keyboard": [[
-            {"text": "🚀 افتح بوكت أوبشن", "url": "https://pocketoption.com/"},
-            {"text": "📈 شارت إضافي", "url": f"https://www.tradingview.com/chart/?symbol=BINANCE%3A{source}"}
-        ]]
-    }
+def get_tf_signal(symbol, interval):
     try:
-        requests.post(url, json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown", "reply_markup": keyboard})
-    except Exception as e:
-        print(e)
+        h = TA_Handler(symbol=symbol, screener="forex", exchange="FX", interval=interval)
+        s = h.get_analysis().summary
+        buys, sells = s['BUY'], s['SELL']
+        if buys+sells == 0: return "NEUTRAL", 50
+        direction = "BUY" if buys > sells else "SELL"
+        percent = int((max(buys, sells) / (buys + sells)) * 100)
+        return direction, percent
+    except:
+        return "ERROR", 0
 
-# Webhook للأسواق الحقيقية من TradingView
-@app.route('/webhook', methods=['POST'])
-@app.route('/webhook/tradingview', methods=['POST'])
-def tradingview_webhook():
-    if request.args.get('key') != SECRET_KEY:
-        return "Unauthorized - Wrong Key", 401
-    data = request.get_json(silent=True) or {}
-    print(f"REAL SIGNAL: {data}")
-    pair_raw = data.get('pair', 'EUR/USD')
-    # اضافة علم
-    pair = f"🇪🇺/🇺🇸 {pair_raw}" if "EURUSD" in pair_raw else pair_raw
-    action = data.get('action', 'BUY').upper()
-    price = data.get('price', '---')
-    send_telegram(pair, action, "TRADINGVIEW", price, "TV", "REAL")
-    return "OK", 200
+def get_confluence_signal(symbol):
+    d5, p5 = get_tf_signal(symbol, Interval.INTERVAL_5_MINUTES)
+    d15, p15 = get_tf_signal(symbol, Interval.INTERVAL_15_MINUTES)
+    d1h, p1h = get_tf_signal(symbol, Interval.INTERVAL_1_HOUR)
 
-# محرك OTC
-def get_binance_klines(symbol, limit=100):
-    try:
-        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={TIMEFRAME}&limit={limit}"
-        r = requests.get(url, timeout=5)
-        data = r.json()
-        if isinstance(data, dict): return None
-        df = pd.DataFrame(data, columns=['time','open','high','low','close','vol','ct','qa','nt','tb','tq','i'])
-        df['close'] = df['close'].astype(float)
-        return df
-    except Exception as e:
-        print(f"Binance Error {symbol}: {e}")
-        return None
+    if d5 == d15 == d1h and d5!= "ERROR":
+        base = int(p5*0.30 + p15*0.35 + p1h*0.35)
+        diff = max(p5, p15, p1h) - min(p5, p15, p1h)
+        if diff > 20: base -= 8
+        elif diff > 12: base -= 4
+        if min(p5, p15, p1h) < 65: base -= 8
+        if base > 92: base = 92
+        if base < 0: base = 0
+        final = base
 
-def analyze_otc():
-    print("OTC Engine Started...")
-    while True:
-        for otc_name, binance_symbol in OTC_BINANCE_MAP.items():
-            df = get_binance_klines(binance_symbol)
-            if df is None or len(df) < 30: continue
-            
-            df['ema9'] = df['close'].ewm(span=9).mean()
-            df['ema21'] = df['close'].ewm(span=21).mean()
-            delta = df['close'].diff()
-            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-            rs = gain / loss
-            df['rsi'] = 100 - (100 / (1 + rs))
-            
-            last = df.iloc[-1]
-            prev = df.iloc[-2]
-            price = round(last['close'], 5)
-            rsi_val = round(last['rsi'], 1)
-
-            action = None
-            if prev['ema9'] < prev['ema21'] and last['ema9'] > last['ema21'] and 50 < last['rsi'] < 70:
-                action = "BUY"
-            elif prev['ema9'] > prev['ema21'] and last['ema9'] < last['ema21'] and 30 < last['rsi'] < 50:
-                action = "SELL"
-
-            if action:
-                now = time.time()
-                if otc_name not in last_signal_time or now - last_signal_time[otc_name] > COOLDOWN:
-                    last_signal_time[otc_name] = now
-                    # نضيف العلم
-                    flag_pair = f"🔵 {otc_name}"
-                    send_telegram(flag_pair, action, binance_symbol, price, rsi_val, "OTC")
-        time.sleep(10)
-
-# استقبال ضغطات الأزرار
-@app.route('/webhook/telegram', methods=['POST'])
-def telegram_updates():
-    data = request.get_json()
-    if "callback_query" in data:
-        cq = data["callback_query"]
-        mode = cq["data"].replace("mode_", "")
-        chat_id = cq["message"]["chat"]["id"]
-        
-        if mode in ["REAL", "OTC", "ALL"]:
-            user_settings["mode"] = mode
-            text = f"تم ✅ الآن البوت يرسل إشارات: {mode}"
+        if final >= 85:
+            decision = "🔥🔥 ممتاز جدا - TOP ادخل 2% 🔥🔥"
+        elif final >= 78:
+            decision = "✅ ممتاز - ادخل 1.5%"
+        elif final >= 70:
+            decision = "✅ جيد - ادخل 1%"
         else:
-            text = f"👑 البوت شغال\nالوضع الحالي: {user_settings['mode']}\nOTC: {len(OTC_BINANCE_MAP)} زوج\nREAL: TradingView Webhook"
-        
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery"
-        requests.post(url, json={"callback_query_id": cq["id"], "text": text})
-        
-        url2 = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        requests.post(url2, json={"chat_id": chat_id, "text": text, "reply_markup": get_telegram_keyboard()})
-    elif "message" in data:
-        msg = data["message"]
-        if msg.get("text") == "/start":
-            url2 = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-            requests.post(url2, json={
-                "chat_id": msg["chat"]["id"], 
-                "text": "👑 أهلاً بك في بوت M2NRU الأسطوري\n\nاختر نوع السوق:", 
-                "reply_markup": get_telegram_keyboard()
-            })
-    return "OK"
+            decision = "⚠️ متوسط - لا تدخل"
 
-threading.Thread(target=analyze_otc, daemon=True).start()
+        return d5, final, f"H1:{p1h}% | 15m:{p15}% | 5m:{p5}%\n{decision}"
 
+    return "NO_TRADE", 0, f"H1:{p1h}% {d1h} | 15m:{p15}% {d15} | 5m:{p5}% {d5}\n\n❌ متضارب"
+
+def main_menu(chat_id):
+    markup = InlineKeyboardMarkup(row_width=1)
+    markup.add(InlineKeyboardButton("🔥 البحث عن الفرصة الذهبية (22 سوق)", callback_data="golden"))
+    markup.add(InlineKeyboardButton("📊 فحص سوق واحد", callback_data="single"))
+    bot.send_message(chat_id, "💰 بوت احترافي اختار", reply_markup=markup)
+
+@bot.message_handler(commands=['start'])
+def start(msg):
+    if msg.from_user.id not in authorized:
+        bot.send_message(msg.chat.id, "🔒 ارسل كلمة السر:")
+        return
+    main_menu(msg.chat.id)
+
+@bot.message_handler(func=lambda m: m.from_user.id not in authorized)
+def check_pass(m):
+    if m.text.strip() == PASSWORD:
+        authorized.add(m.from_user.id)
+        bot.send_message(m.chat.id, "✅ تم فتح البوت")
+        main_menu(m.chat.id)
+    else:
+        bot.send_message(m.chat.id, "❌ كلمة سر غلط")
+
+@bot.callback_query_handler(func=lambda c: c.data=="single")
+def single(call):
+    if call.from_user.id not in authorized: return
+    bot.answer_callback_query(call.id)
+    markup = InlineKeyboardMarkup(row_width=2)
+    for name in MARKETS:
+        markup.add(InlineKeyboardButton(name, callback_data=f"market_{name}"))
+    bot.send_message(call.message.chat.id, "اختر السوق:", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda c: c.data=="golden")
+def golden(call):
+    if call.from_user.id not in authorized: return
+    bot.answer_callback_query(call.id, "⏳ افحص 22 سوق...")
+    loading = bot.send_message(call.message.chat.id, f"⏳ افحص {len(MARKETS)} سوق (25 ثانية)...")
+    goldens = []
+    start_t = time.time()
+    for name, sym in MARKETS.items():
+        try:
+            d, p, details = get_confluence_signal(sym)
+            if d!= "NO_TRADE" and p >= 70:
+                emoji = "🟢 BUY" if d=="BUY" else "🔴 SELL"
+                goldens.append((p, f"{emoji} {name} - {p}%\n{details}\n"))
+        except: continue
+
+    goldens.sort(key=lambda x: x[0], reverse=True)
+    elapsed = round(time.time() - start_t, 1)
+    if not goldens:
+        bot.edit_message_text(f"❌ فحصت {len(MARKETS)} سوق في {elapsed}ث - لا يوجد موثوق حاليا\nجرب بعد 5 دقايق", call.message.chat.id, loading.message_id)
+    else:
+        best = goldens[0]
+        text = f"🏆 أفضل صفقة موثوقة {best[0]}% 🏆\n{best[1]}\n"
+        text += f"━━━━━━━━━━━━\n🔥🔥 {len(goldens)} فرص مرتبة حسب الثقة في {elapsed}ث 🔥🔥\n\n"
+        for i, (p, detail) in enumerate(goldens, 1):
+            crown = "👑" if i==1 else f"{i}."
+            text += f"{crown} {detail}\n"
+        text += f"\n💡 نصيحة: ادخل رقم 1 فقط - أعلى ثقة"
+        bot.edit_message_text(text, call.message.chat.id, loading.message_id)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("market_"))
+def choose_market(call):
+    if call.from_user.id not in authorized: return
+    bot.answer_callback_query(call.id)
+    name = call.data.replace("market_", "")
+    user_data[call.from_user.id] = MARKETS[name], name
+    markup = InlineKeyboardMarkup(row_width=1)
+    markup.add(InlineKeyboardButton("🔍 فحص شامل H1+15m+5m", callback_data="time_ALL"))
+    markup.add(InlineKeyboardButton("5m فقط", callback_data="time_5"), InlineKeyboardButton("15m فقط", callback_data="time_15"))
+    bot.send_message(call.message.chat.id, f"اخترت {name}\nاختر نوع الفحص:", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("time_"))
+def choose_time(call):
+    if call.from_user.id not in authorized: return
+    user_id = call.from_user.id
+    now = time.time()
+    if user_id in last_request and now - last_request[user_id] < 3:
+        bot.answer_callback_query(call.id, "⏳ انتظر 3 ثواني")
+        return
+    last_request[user_id] = now
+    bot.answer_callback_query(call.id)
+    mode = call.data.replace("time_", "")
+    symbol, name = user_data.get(user_id, (None, None))
+    if not symbol: return
+    loading = bot.send_message(call.message.chat.id, f"⏳ جاري فحص {name}...")
+    if mode == "ALL":
+        direction, percent, details = get_confluence_signal(symbol)
+        if direction == "NO_TRADE":
+            bot.edit_message_text(f"📊 {name}\n{details}", call.message.chat.id, loading.message_id)
+            return
+        emoji = "🟢 BUY صعود" if direction == "BUY" else "🔴 SELL هبوط"
+        bot.edit_message_text(f"📊 {name}\n{emoji}\n💪 ثقة: {percent}%\n\n{details}", call.message.chat.id, loading.message_id)
+    else:
+        tf_map = {"5": Interval.INTERVAL_5_MINUTES, "15": Interval.INTERVAL_15_MINUTES}
+        d, p = get_tf_signal(symbol, tf_map[mode])
+        bot.edit_message_text(f"📊 {name} {mode}m\n{'🟢 BUY' if d=='BUY' else '🔴 SELL'}\n💪 {p}%\n\n{'✅ ادخل' if p>=70 else '❌ لا تدخل'}", call.message.chat.id, loading.message_id)
+
+app = Flask(__name__)
 @app.route('/')
-def home():
-    return f"Legendary Bot Running | Mode: {user_settings['mode']} | Real: {len(REAL_MARKETS)} | OTC: {len(OTC_MARKETS_LIST)}"
+def home(): return "Bot is Live!"
+def run_flask():
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+threading.Thread(target=run_flask, daemon=True).start()
+bot.remove_webhook()
+time.sleep(2)
+while True:
+    try:
+        bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=60)
+    except Exception as e:
+        print(f"Error: {e}")
+        time.sleep(5)
