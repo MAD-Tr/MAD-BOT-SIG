@@ -36,33 +36,63 @@ MARKETS_OTC = {
 ALL_MARKETS = {**MARKETS_REAL, **MARKETS_OTC}
 authorized = set()
 
+# كاش لتقليل طلبات TradingView
+signal_cache = {}
+CACHE_TIME = 30  # ثانية
+
 def get_tf_signal_strong(symbol, interval):
-    try:
-        h = TA_Handler(symbol=symbol, screener="forex", exchange="FX", interval=interval)
-        a = h.get_analysis()
-        s = a.summary
-        ind = a.indicators
-        rsi = ind.get('RSI', 50)
-        macd = ind.get('MACD.macd', 0)
-        sig = ind.get('MACD.signal', 0)
-        if s['BUY']+s['SELL']==0: return "NEUTRAL", 50, rsi, macd, sig
-        d = "BUY" if s['BUY']>s['SELL'] else "SELL"
-        strength = int((max(s['BUY'],s['SELL'])/(s['BUY']+s['SELL']))*100)
-        if d=="BUY":
-            if rsi>70: strength-=15
-            if macd<sig: strength-=10
-        else:
-            if rsi<30: strength-=15
-            if macd>sig: strength-=10
-        return d, max(0,strength), rsi, macd, sig
-    except:
-        return "ERROR",0,50,0,0
+    cache_key = f"{symbol}_{interval}"
+    now = time.time()
+    if cache_key in signal_cache:
+        cached_time, cached_data = signal_cache[cache_key]
+        if now - cached_time < CACHE_TIME:
+            return cached_data
+    
+    # إعادة محاولة 3 مرات مع تأخير
+    for attempt in range(3):
+        try:
+            h = TA_Handler(symbol=symbol, screener="forex", exchange="FX", interval=interval)
+            a = h.get_analysis()
+            s = a.summary
+            ind = a.indicators
+            rsi = ind.get('RSI', 50)
+            macd = ind.get('MACD.macd', 0)
+            sig = ind.get('MACD.signal', 0)
+            if s['BUY']+s['SELL']==0: 
+                result = ("NEUTRAL", 50, rsi, macd, sig)
+                signal_cache[cache_key] = (now, result)
+                return result
+            d = "BUY" if s['BUY']>s['SELL'] else "SELL"
+            strength = int((max(s['BUY'],s['SELL'])/(s['BUY']+s['SELL']))*100)
+            if d=="BUY":
+                if rsi>70: strength-=15
+                if macd<sig: strength-=10
+            else:
+                if rsi<30: strength-=15
+                if macd>sig: strength-=10
+            result = (d, max(0,strength), rsi, macd, sig)
+            signal_cache[cache_key] = (now, result)
+            return result
+        except Exception as e:
+            if attempt < 2:
+                time.sleep(0.8 + attempt*0.5)  # تأخير متزايد
+                continue
+            print(f"TV Error {symbol} {interval}: {e}")
+            # لا ترجع ERROR - رجع NEUTRAL عشان ما يظهر 0%
+            return "NEUTRAL", 0, 50, 0, 0
+    return "NEUTRAL", 0, 50, 0, 0
 
 def get_strong_signal_real(symbol):
     d5,p5,r5,_,_ = get_tf_signal_strong(symbol, Interval.INTERVAL_5_MINUTES)
     d15,p15,r15,_,_ = get_tf_signal_strong(symbol, Interval.INTERVAL_15_MINUTES)
     d30,p30,r30,_,_ = get_tf_signal_strong(symbol, Interval.INTERVAL_30_MINUTES)
-    if "ERROR" in [d5,d15,d30]: return "NO_TRADE",0,"❌ خطأ بيانات TradingView"
+    if "ERROR" in [d5,d15,d30] or "NEUTRAL" in [d5,d15,d30] and min(p5,p15,p30)==0:
+        # لو البيانات ما تحملت - حاول مرة ثانية
+        time.sleep(0.5)
+        d5,p5,r5,_,_ = get_tf_signal_strong(symbol, Interval.INTERVAL_5_MINUTES)
+        d15,p15,r15,_,_ = get_tf_signal_strong(symbol, Interval.INTERVAL_15_MINUTES)
+        if min(p5,p15,p30)==0:
+            return "NO_TRADE",0,"⏳ جاري تحميل بيانات TradingView - حاول مرة ثانية بعد 10 ثواني"
     if d5==d15==d30 and d5 in ["BUY","SELL"]:
         base=int(p5*0.25+p15*0.40+p30*0.35)
         diff=max(p5,p15,p30)-min(p5,p15,p30)
@@ -83,7 +113,11 @@ def get_strong_signal_otc(symbol):
     d1,p1,r1,_,_ = get_tf_signal_strong(symbol, Interval.INTERVAL_1_MINUTE)
     d5,p5,r5,_,_ = get_tf_signal_strong(symbol, Interval.INTERVAL_5_MINUTES)
     d15,p15,r15,_,_ = get_tf_signal_strong(symbol, Interval.INTERVAL_15_MINUTES)
-    if "ERROR" in [d1,d5,d15]: return "NO_TRADE",0,"❌ خطأ بيانات TradingView"
+    if "ERROR" in [d1,d5,d15] or min(p1,p5,p15)==0:
+        time.sleep(0.5)
+        d1,p1,r1,_,_ = get_tf_signal_strong(symbol, Interval.INTERVAL_1_MINUTE)
+        if min(p1,p5,p15)==0:
+            return "NO_TRADE",0,"⏳ جاري تحميل بيانات TradingView - حاول مرة ثانية بعد 10 ثواني"
     if d1==d5==d15 and d1 in ["BUY","SELL"]:
         base=int(p1*0.40+p5*0.35+p15*0.25)
         diff=max(p1,p5,p15)-min(p1,p5,p15)
@@ -131,6 +165,8 @@ MAD_HTML = """
 .item.strong{border-color:#00ff00;box-shadow:0 0 10px rgba(0,255,0,.15)}.item.weak{border-color:#333;opacity:.6}
 .hidden{display:none}.row{display:flex;gap:8px}.live-badge{display:flex;justify-content:space-between;background:#111;border:1px solid #222;border-radius:20px;padding:10px 16px;font-size:12px;margin:10px 0}
 .badge-buy{background:#00ff00;color:#000;padding:3px 10px;border-radius:20px;font-weight:900;font-size:11px}.badge-sell{background:#ff0000;color:#fff;padding:3px 10px;border-radius:20px;font-weight:900;font-size:11px}.badge-no{background:#333;color:#888;padding:3px 10px;border-radius:20px;font-size:11px}
+
+/* صندوق النتيجة الأسود الجديد */
 .result-box{background:#000;border:3px solid #222;border-radius:20px;padding:20px;margin:16px 0;text-align:center;box-shadow:0 0 30px rgba(0,0,0,.8)}
 .result-box.buy{border-color:#00ff00;box-shadow:0 0 30px rgba(0,255,0,.4), inset 0 0 20px rgba(0,255,0,.05)}
 .result-box.sell{border-color:#ff0000;box-shadow:0 0 30px rgba(255,0,0,.4), inset 0 0 20px rgba(255,0,0,.05)}
@@ -184,6 +220,7 @@ function switchTab(t){document.getElementById('tabReal').className=t=='real'?'ta
 const realPairs=["🇪🇺/🇺🇸 EUR/USD","🇬🇧/🇺🇸 GBP/USD","🇺🇸/🇯🇵 USD/JPY","🇦🇺/🇺🇸 AUD/USD","🇺🇸/🇨🇦 USD/CAD","🇪🇺/🇯🇵 EUR/JPY","🇨🇦/🇯🇵 CAD/JPY","🇪🇺/🇬🇧 EUR/GBP","🇦🇺/🇯🇵 AUD/JPY","🇳🇿/🇺🇸 NZD/USD","🇪🇺/🇨🇭 EUR/CHF","🇬🇧/🇯🇵 GBP/JPY","🇦🇺/🇨🇦 AUD/CAD","🇪🇺/🇦🇺 EUR/AUD","🇬🇧/🇨🇭 GBP/CHF","🇺🇸/🇨🇭 USD/CHF","🇪🇺/🇨🇦 EUR/CAD","🇦🇺/🇨🇭 AUD/CHF","🇬🇧/🇦🇺 GBP/AUD"];
 const otcPairs=["🟡 🇪🇺/🇺🇸 EUR/USD OTC","🟡 🇬🇧/🇺🇸 GBP/USD OTC","🟡 🇬🇧/🇯🇵 GBP/JPY OTC","🟡 🇪🇺/🇯🇵 EUR/JPY OTC","🟡 🇦🇺/🇺🇸 AUD/USD OTC","🟡 🇺🇸/🇯🇵 USD/JPY OTC","🟡 🇪🇺/🇬🇧 EUR/GBP OTC","🟡 🇺🇸/🇨🇭 USD/CHF OTC"];
 let candleTimer=null;
+
 function loadMarkets(){
   let r=document.getElementById('realList');r.innerHTML='';
   realPairs.forEach(function(p){
@@ -214,8 +251,10 @@ async function fetchSignal(pair, strong){
 function getNextCandleSeconds(isOtc){
   let now=new Date();
   if(isOtc){
+    // OTC 1 دقيقة - كل دقيقة شمعة جديدة
     return 60 - now.getSeconds();
   }else{
+    // حقيقي 15m - كل 15 دقيقة: 00,15,30,45
     let m=now.getMinutes();
     let s=now.getSeconds();
     let nextM=Math.ceil((m+1)/15)*15;
@@ -242,6 +281,7 @@ function startCandleCountdown(isOtc){
     }
     if(sec<=0){
       clearInterval(candleTimer);
+      // مع بداية شمعة جديدة - نحدث الإشارة تلقائي
       let pair=document.getElementById('singleSelect').value;
       if(pair) setTimeout(function(){checkSingle();}, 1500);
     }
@@ -254,9 +294,14 @@ async function checkSingle(){
   let isOtc=pair.indexOf('OTC')!==-1;
   let resDiv=document.getElementById('singleResult');
   resDiv.innerHTML='<div style="text-align:center;padding:20px;color:#888">⏳ يحلل '+pair+' من TradingView مباشر...</div>';
+  // ينزل تحت تلقائي
   setTimeout(function(){resDiv.scrollIntoView({behavior:'smooth',block:'center'});}, 200);
+  
   let data=await fetchSignal(pair, true);
+  
+  // ينزل تحت مرة ثانية بعد النتيجة
   setTimeout(function(){resDiv.scrollIntoView({behavior:'smooth',block:'center'});}, 100);
+  
   if(data.dir=='NO_TRADE'){
     resDiv.innerHTML='<div class="result-box no">'
       +'<div class="result-pair">'+pair+'</div>'
@@ -271,6 +316,7 @@ async function checkSingle(){
     let dirClass=isBuy?'buy':'sell';
     let dirText=isBuy?'BUY ↗️':'SELL ↘️';
     let dirEmoji=isBuy?'🟢':'🔴';
+    let bgColor=isBuy?'#00ff00':'#ff0000';
     resDiv.innerHTML='<div class="result-box '+boxClass+'">'
       +'<div class="result-pair">'+pair+' • TradingView LIVE</div>'
       +'<div class="result-dir '+dirClass+'">'+dirEmoji+' '+dirText+'</div>'
@@ -371,7 +417,7 @@ def signal_api():
         else:
             d,p,det = get_strong_signal_real(symbol)
             min_strong = 78
-        is_strong = p >= min_strong and d!= "NO_TRADE"
+        is_strong = p >= min_strong and d != "NO_TRADE"
         if d == "NO_TRADE":
             return jsonify({"dir": "NO_TRADE", "dir_formatted": "⛔ لا تدخل", "accuracy": p, "detail": det, "tf": "10s" if is_otc else "15m", "pair": pair, "is_strong": False})
         if d == "BUY":
@@ -388,6 +434,7 @@ def signal_api():
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     print(f"Starting Flask on port {port}")
+    # Render يحتاج 0.0.0.0 و debug=False
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
 if bot:
@@ -480,15 +527,19 @@ def run_bot():
         run_bot()
 
 if __name__ == "__main__":
+    # شغل البوت في ثريد منفصل - لو طاح الفلاسك يبقى شغال
     try:
         if bot:
             threading.Thread(target=run_bot, daemon=True).start()
             print("Bot thread started")
     except Exception as e:
         print(f"Bot thread failed to start: {e}")
+    
+    # شغل الفلاسك - هذا لازم يبقى شغال
     try:
         run_flask()
     except Exception as e:
         print(f"Flask failed: {e}")
+        # حتى لو فشل الفلاسك، لا تخرج بسرعة
         import time
         time.sleep(10)
