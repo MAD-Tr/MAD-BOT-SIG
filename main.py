@@ -1,4 +1,4 @@
-import os, time, threading
+import os, time, threading, requests, math
 from flask import Flask, request, jsonify
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
@@ -35,6 +35,162 @@ MARKETS_OTC = {
 }
 ALL_MARKETS = {**MARKETS_REAL, **MARKETS_OTC}
 authorized = set()
+
+# ========== BINANCE OTC ==========
+# خريطة OTC -> Binance (24 ساعة)
+BINANCE_OTC_MAP = {
+    "EURUSD": "EURUSDT",   # يورو
+    "GBPUSD": "GBPUSDT",   # باوند
+    "GBPJPY": "BTCUSDT",   # بديل متقلب للـ JPY
+    "EURJPY": "ETHUSDT",   # بديل متقلب
+    "AUDUSD": "AUDUSDT",   # استرالي موجود
+    "USDJPY": "BTCUSDT",   # بديل
+    "EURGBP": "EURUSDT",   # يورو
+    "USDCHF": "BNBUSDT",   # بديل
+}
+
+BINANCE_CACHE = {}
+BINANCE_CACHE_TIME = 15
+
+def get_binance_klines(symbol, interval, limit=100):
+    """جيب شموع من Binance"""
+    try:
+        # interval: 1m, 5m, 15m
+        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+        r = requests.get(url, timeout=5)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        closes = [float(c[4]) for c in data]  # close prices
+        return closes
+    except Exception as e:
+        print(f"Binance error {symbol} {interval}: {e}")
+        return None
+
+def calc_rsi(prices, period=14):
+    if len(prices) < period+1:
+        return 50
+    deltas = [prices[i+1]-prices[i] for i in range(len(prices)-1)]
+    gains = [max(0,d) for d in deltas[-period:]]
+    losses = [max(0,-d) for d in deltas[-period:]]
+    avg_gain = sum(gains)/period if gains else 0
+    avg_loss = sum(losses)/period if losses else 0.00001
+    if avg_loss == 0:
+        return 70 if avg_gain>0 else 50
+    rs = avg_gain/avg_loss
+    return 100 - (100/(1+rs))
+
+def calc_ema(prices, period):
+    if len(prices) < period:
+        return prices[-1] if prices else 0
+    k = 2/(period+1)
+    ema = prices[0]
+    for p in prices[1:]:
+        ema = p*k + ema*(1-k)
+    return ema
+
+def calc_macd(prices):
+    if len(prices) < 26:
+        return 0, 0
+    ema12 = calc_ema(prices, 12)
+    ema26 = calc_ema(prices, 26)
+    macd = ema12 - ema26
+    # signal = EMA9 of MACD - نبسطها
+    # نحسب MACD line تاريخي بسيط
+    macd_history = []
+    for i in range(len(prices)):
+        if i < 26: continue
+        e12 = calc_ema(prices[:i+1], 12)
+        e26 = calc_ema(prices[:i+1], 26)
+        macd_history.append(e12-e26)
+    signal = calc_ema(macd_history[-20:], 9) if len(macd_history)>=9 else macd*0.9
+    return macd, signal
+
+def get_binance_tf_signal(symbol, interval_str):
+    """إشارة من Binance لفريم واحد"""
+    cache_key = f"BN_{symbol}_{interval_str}"
+    now = time.time()
+    if cache_key in BINANCE_CACHE:
+        t, d = BINANCE_CACHE[cache_key]
+        if now - t < BINANCE_CACHE_TIME:
+            return d
+
+    closes = get_binance_klines(symbol, interval_str, 100)
+    if not closes or len(closes) < 30:
+        return "NEUTRAL", 50, 50, 0, 0
+
+    rsi = calc_rsi(closes, 14)
+    macd, sig = calc_macd(closes)
+    
+    # تحديد الاتجاه
+    # RSI + EMA + MACD
+    ema_fast = calc_ema(closes, 9)
+    ema_slow = calc_ema(closes, 21)
+    price = closes[-1]
+    
+    buy_score = 0
+    sell_score = 0
+    
+    if price > ema_fast: buy_score += 30
+    else: sell_score += 30
+    
+    if ema_fast > ema_slow: buy_score += 20
+    else: sell_score += 20
+    
+    if rsi > 50: buy_score += 25
+    else: sell_score += 25
+    
+    if macd > sig: buy_score += 25
+    else: sell_score += 25
+    
+    # قوة
+    total = buy_score + sell_score
+    if total == 0:
+        result = ("NEUTRAL", 50, rsi, macd, sig)
+    elif buy_score > sell_score:
+        strength = int((buy_score/total)*100)
+        # تعديل RSI
+        if rsi > 70: strength -= 15
+        if rsi > 80: strength -= 10
+        result = ("BUY", max(0,strength), rsi, macd, sig)
+    else:
+        strength = int((sell_score/total)*100)
+        if rsi < 30: strength -= 15
+        if rsi < 20: strength -= 10
+        result = ("SELL", max(0,strength), rsi, macd, sig)
+    
+    BINANCE_CACHE[cache_key] = (now, result)
+    return result
+
+def get_strong_signal_otc_binance(symbol):
+    """إشارة OTC قوية من Binance - 1m+5m+15m"""
+    bin_symbol = BINANCE_OTC_MAP.get(symbol, "BTCUSDT")
+    
+    d1,p1,r1,_,_ = get_binance_tf_signal(bin_symbol, "1m")
+    d5,p5,r5,_,_ = get_binance_tf_signal(bin_symbol, "5m")
+    d15,p15,r15,_,_ = get_binance_tf_signal(bin_symbol, "15m")
+    
+    if min(p1,p5,p15) == 0 and "NEUTRAL" in [d1,d5,d15]:
+        return "NO_TRADE", 0, f"⏳ Binance {bin_symbol} يحمل البيانات..."
+    
+    # لازم كل الفريمات نفس الاتجاه
+    if d1==d5==d15 and d1 in ["BUY","SELL"]:
+        base = int(p1*0.45 + p5*0.35 + p15*0.20)  # 1m أهم
+        diff = max(p1,p5,p15) - min(p1,p5,p15)
+        if diff > 25: base -= 12
+        elif diff > 15: base -= 6
+        if min(p1,p5,p15) < 65: base -= 12
+        if min(p1,p5,p15) < 75: base -= 5
+        if r1 > 78 and d1=="BUY": base -= 10
+        if r1 < 22 and d1=="SELL": base -= 10
+        
+        base = max(0, min(96, base))
+        if base >= 82:
+            return d1, base, f"BINANCE OTC {bin_symbol} 1m:{p1}% 5m:{p5}% 15m:{p15}% | RSI:{int(r1)} - مباشر 24h"
+        else:
+            return "NO_TRADE", base, f"⚠️ BINANCE OTC ضعيف {base}% - {bin_symbol} | 1m:{p1}% 5m:{p5}% 15m:{p15}%"
+    
+    return "NO_TRADE", 0, f"❌ BINANCE OTC متذبذب {d1}/{d5}/{d15} - {bin_symbol} لا تدخل"
 
 # كاش لتقليل طلبات TradingView
 signal_cache = {}
@@ -110,29 +266,8 @@ def get_strong_signal_real(symbol):
     return "NO_TRADE",0,"❌ متضارب %s/%s/%s - لا تدخل" % (d5,d15,d30)
 
 def get_strong_signal_otc(symbol):
-    d1,p1,r1,_,_ = get_tf_signal_strong(symbol, Interval.INTERVAL_1_MINUTE)
-    d5,p5,r5,_,_ = get_tf_signal_strong(symbol, Interval.INTERVAL_5_MINUTES)
-    d15,p15,r15,_,_ = get_tf_signal_strong(symbol, Interval.INTERVAL_15_MINUTES)
-    if "ERROR" in [d1,d5,d15] or min(p1,p5,p15)==0:
-        time.sleep(0.5)
-        d1,p1,r1,_,_ = get_tf_signal_strong(symbol, Interval.INTERVAL_1_MINUTE)
-        if min(p1,p5,p15)==0:
-            return "NO_TRADE",0,"⏳ جاري تحميل بيانات TradingView - حاول مرة ثانية بعد 10 ثواني"
-    if d1==d5==d15 and d1 in ["BUY","SELL"]:
-        base=int(p1*0.40+p5*0.35+p15*0.25)
-        diff=max(p1,p5,p15)-min(p1,p5,p15)
-        if diff>20: base-=12
-        elif diff>12: base-=6
-        if min(p1,p5,p15)<65: base-=15
-        if min(p1,p5,p15)<75: base-=7
-        if r1>75 and d1=="BUY": base-=12
-        if r1<25 and d1=="SELL": base-=12
-        base=max(0,min(95,base))
-        if base>=82:
-            return d1,base,"TV OTC 1m:%s%% 5m:%s%% 15m:%s%% | RSI:%s - مباشر TradingView" % (p1,p5,p15,int(r1))
-        else:
-            return "NO_TRADE",base,"⚠️ OTC ضعيف %s%% - انتظر | 1m:%s%% 5m:%s%% 15m:%s%%" % (base,p1,p5,p15)
-    return "NO_TRADE",0,"❌ OTC متذبذب %s/%s/%s - لا تدخل" % (d1,d5,d15)
+    # الآن OTC من Binance مباشر 24 ساعة
+    return get_strong_signal_otc_binance(symbol)
 
 def main_menu(chat_id):
     if not bot: return
