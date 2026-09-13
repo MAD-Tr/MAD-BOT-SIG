@@ -1,3 +1,5 @@
-Flask==3.1.0
-pyTelegramBotAPI==4.15.0
-tradingview-ta==3.3.0
+pyTelegramBotAPI
+tradingview-ta
+Flask
+requests
+python-dotenv
