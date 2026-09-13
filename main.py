@@ -51,15 +51,23 @@ BINANCE_CACHE = {}
 CACHE_TIME = 15
 
 def get_binance_klines(symbol, interval, limit=30):
-    try:
-        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
-        r = requests.get(url, timeout=3)
-        if r.status_code != 200:
-            return None
-        data = r.json()
-        return [float(c[4]) for c in data]
-    except:
-        return None
+    # جرب 3 سيرفرات بديلة لأن binance.com محظور في Render
+    endpoints = [
+        f"https://data-api.binance.vision/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}",
+        f"https://api1.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}",
+        f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}",
+    ]
+    headers = {"User-Agent": "Mozilla/5.0"}
+    for url in endpoints:
+        try:
+            r = requests.get(url, timeout=3, headers=headers)
+            if r.status_code == 200:
+                data = r.json()
+                if data and len(data)>0:
+                    return [float(c[4]) for c in data]
+        except:
+            continue
+    return None
 
 def calc_rsi(prices, period=14):
     if len(prices) < period+1:
