@@ -24,20 +24,55 @@ MARKETS_REAL = {
     "🇬🇧/🇦🇺 GBP/AUD": "GBPAUD",
 }
 MARKETS_OTC = {
-    "🟡 🇪🇺/🇺🇸 EUR/USD OTC": "EURUSD",
-    "🟡 🇬🇧/🇺🇸 GBP/USD OTC": "GBPUSD",
-    "🟡 🇬🇧/🇯🇵 GBP/JPY OTC": "GBPJPY",
-    "🟡 🇪🇺/🇯🇵 EUR/JPY OTC": "EURJPY",
-    "🟡 🇦🇺/🇺🇸 AUD/USD OTC": "AUDUSD",
-    "🟡 🇺🇸/🇯🇵 USD/JPY OTC": "USDJPY",
-    "🟡 🇪🇺/🇬🇧 EUR/GBP OTC": "EURGBP",
-    "🟡 🇺🇸/🇨🇭 USD/CHF OTC": "USDCHF",
+    # نفس أسواق Pocket Option بالضبط - كلها +92% Payout مثل الصورة
+    "🟡 AUD/CAD OTC": "AUDCAD",
+    "🟡 AUD/CHF OTC": "AUDCHF",
+    "🟡 BHD/CNY OTC": "BHDCNY",
+    "🟡 CAD/CHF OTC": "CADCHF",
+    "🟡 CAD/JPY OTC": "CADJPY",
+    "🟡 CHF/NOK OTC": "CHFNOK",
+    "🟡 EUR/CHF OTC": "EURCHF",
+    "🟡 EUR/RUB OTC": "EURRUB",
+    "🟡 LBP/USD OTC": "LBPUSD",
+    "🟡 OMR/CNY OTC": "OMRCNY",
+    "🟡 SAR/CNY OTC": "SARCYN",
+    "🟡 EUR/USD OTC": "EURUSD",
+    "🟡 GBP/USD OTC": "GBPUSD",
+    "🟡 GBP/JPY OTC": "GBPJPY",
+    "🟡 EUR/JPY OTC": "EURJPY",
+    "🟡 AUD/USD OTC": "AUDUSD",
+    "🟡 USD/JPY OTC": "USDJPY",
+    "🟡 EUR/GBP OTC": "EURGBP",
+    "🟡 USD/CHF OTC": "USDCHF",
+    "🟡 AUD/JPY OTC": "AUDJPY",
+    "🟡 NZD/USD OTC": "NZDUSD",
+    "🟡 EUR/AUD OTC": "EURAUD",
+    "🟡 GBP/AUD OTC": "GBPAUD",
+    "🟡 GBP/CHF OTC": "GBPCHF",
+    "🟡 USD/CAD OTC": "USDCAD",
+    "🟡 EUR/CAD OTC": "EURCAD",
+    "🟡 CHF/JPY OTC": "CHFJPY",
+    "🟡 NZD/JPY OTC": "NZDJPY",
+    "🟡 EUR/NZD OTC": "EURNZD",
+    "🟡 GBP/NZD OTC": "GBPNZD",
 }
 ALL_MARKETS = {**MARKETS_REAL, **MARKETS_OTC}
 authorized = set()
 
 # ===== BINANCE OTC (سريع 24h) =====
 BINANCE_OTC_MAP = {
+    # أسواق Pocket Option -> Binance (كلها 92% Payout)
+    "AUDCAD": "BTCUSDT",
+    "AUDCHF": "ETHUSDT",
+    "BHDCNY": "BTCUSDT",
+    "CADCHF": "BNBUSDT",
+    "CADJPY": "BTCUSDT",
+    "CHFNOK": "ETHUSDT",
+    "EURCHF": "EURUSDT",
+    "EURRUB": "BTCUSDT",
+    "LBPUSD": "BTCUSDT",
+    "OMRCNY": "ETHUSDT",
+    "SARCYN": "BTCUSDT",
     "EURUSD": "EURUSDT",
     "GBPUSD": "GBPUSDT",
     "GBPJPY": "BTCUSDT",
@@ -46,6 +81,17 @@ BINANCE_OTC_MAP = {
     "USDJPY": "BTCUSDT",
     "EURGBP": "EURUSDT",
     "USDCHF": "BNBUSDT",
+    "AUDJPY": "BTCUSDT",
+    "NZDUSD": "BTCUSDT",
+    "EURAUD": "ETHUSDT",
+    "GBPAUD": "BTCUSDT",
+    "GBPCHF": "BNBUSDT",
+    "USDCAD": "BTCUSDT",
+    "EURCAD": "EURUSDT",
+    "CHFJPY": "ETHUSDT",
+    "NZDJPY": "BTCUSDT",
+    "EURNZD": "EURUSDT",
+    "GBPNZD": "GBPUSDT",
 }
 BINANCE_CACHE = {}
 CACHE_TIME = 15
@@ -281,11 +327,11 @@ MAD_HTML = """
 <button class="btn-red" onclick="checkAllMarkets()">📊 فحص جميع الأسواق</button>
 <div class="card"><div style="font-weight:800;margin-bottom:10px">📊 فحص سوق واحد</div><div class="row"><select id="singleSelect" class="select">
 <option>🇪🇺/🇺🇸 EUR/USD</option><option>🇬🇧/🇺🇸 GBP/USD</option><option>🇺🇸/🇯🇵 USD/JPY</option><option>🇦🇺/🇺🇸 AUD/USD</option><option>🇺🇸/🇨🇦 USD/CAD</option><option>🇪🇺/🇯🇵 EUR/JPY</option><option>🇨🇦/🇯🇵 CAD/JPY</option><option>🇪🇺/🇬🇧 EUR/GBP</option><option>🇦🇺/🇯🇵 AUD/JPY</option><option>🇳🇿/🇺🇸 NZD/USD</option><option>🇪🇺/🇨🇭 EUR/CHF</option><option>🇬🇧/🇯🇵 GBP/JPY</option><option>🇦🇺/🇨🇦 AUD/CAD</option><option>🇪🇺/🇦🇺 EUR/AUD</option><option>🇬🇧/🇨🇭 GBP/CHF</option><option>🇺🇸/🇨🇭 USD/CHF</option><option>🇪🇺/🇨🇦 EUR/CAD</option><option>🇦🇺/🇨🇭 AUD/CHF</option><option>🇬🇧/🇦🇺 GBP/AUD</option>
-<option>🟡 🇪🇺/🇺🇸 EUR/USD OTC</option><option>🟡 🇬🇧/🇺🇸 GBP/USD OTC</option><option>🟡 🇬🇧/🇯🇵 GBP/JPY OTC</option><option>🟡 🇪🇺/🇯🇵 EUR/JPY OTC</option><option>🟡 🇦🇺/🇺🇸 AUD/USD OTC</option><option>🟡 🇺🇸/🇯🇵 USD/JPY OTC</option><option>🟡 🇪🇺/🇬🇧 EUR/GBP OTC</option><option>🟡 🇺🇸/🇨🇭 USD/CHF OTC</option>
+<option>🟡 AUD/CAD OTC +92%</option><option>🟡 AUD/CHF OTC +92%</option><option>🟡 BHD/CNY OTC +92%</option><option>🟡 CAD/CHF OTC +92%</option><option>🟡 CAD/JPY OTC +92%</option><option>🟡 CHF/NOK OTC +92%</option><option>🟡 EUR/CHF OTC +92%</option><option>🟡 EUR/RUB OTC +92%</option><option>🟡 LBP/USD OTC +92%</option><option>🟡 EUR/USD OTC +92%</option><option>🟡 GBP/USD OTC +92%</option><option>🟡 GBP/JPY OTC +92%</option><option>🟡 AUD/USD OTC +92%</option><option>🟡 USD/JPY OTC +92%</option>
 </select><button class="btn-small" onclick="checkSingle()">فحص قوي</button></div>
 <div id="singleResult"></div>
 </div>
-<div class="tabs"><button class="tab active" id="tabReal" onclick="switchTab('real')">حقيقي TradingView (19)</button><button class="tab" id="tabOtc" onclick="switchTab('otc')">OTC Binance 24h (8)</button></div>
+<div class="tabs"><button class="tab active" id="tabReal" onclick="switchTab('real')">حقيقي TV (19)</button><button class="tab" id="tabOtc" onclick="switchTab('otc')">🔥 OTC +92% (30)</button></div>
 <div id="realList" class="list"></div><div id="otcList" class="list hidden"></div>
 </div>
 <script>
@@ -295,7 +341,7 @@ function onNameInput(){let v=document.getElementById('nameInput').value;document
 function enterApp(){let n=document.getElementById('nameInput').value.trim();if(n.length<2)return;localStorage.setItem('mad_name',n);document.getElementById('userName').innerText=n;document.getElementById('screen1').classList.add('hidden');document.getElementById('screen2').classList.remove('hidden');loadMarkets();}
 function switchTab(t){document.getElementById('tabReal').className=t=='real'?'tab active':'tab';document.getElementById('tabOtc').className=t=='otc'?'tab active':'tab';document.getElementById('realList').classList.toggle('hidden',t!='real');document.getElementById('otcList').classList.toggle('hidden',t!='otc');}
 const realPairs=["🇪🇺/🇺🇸 EUR/USD","🇬🇧/🇺🇸 GBP/USD","🇺🇸/🇯🇵 USD/JPY","🇦🇺/🇺🇸 AUD/USD","🇺🇸/🇨🇦 USD/CAD","🇪🇺/🇯🇵 EUR/JPY","🇨🇦/🇯🇵 CAD/JPY","🇪🇺/🇬🇧 EUR/GBP","🇦🇺/🇯🇵 AUD/JPY","🇳🇿/🇺🇸 NZD/USD","🇪🇺/🇨🇭 EUR/CHF","🇬🇧/🇯🇵 GBP/JPY","🇦🇺/🇨🇦 AUD/CAD","🇪🇺/🇦🇺 EUR/AUD","🇬🇧/🇨🇭 GBP/CHF","🇺🇸/🇨🇭 USD/CHF","🇪🇺/🇨🇦 EUR/CAD","🇦🇺/🇨🇭 AUD/CHF","🇬🇧/🇦🇺 GBP/AUD"];
-const otcPairs=["🟡 🇪🇺/🇺🇸 EUR/USD OTC","🟡 🇬🇧/🇺🇸 GBP/USD OTC","🟡 🇬🇧/🇯🇵 GBP/JPY OTC","🟡 🇪🇺/🇯🇵 EUR/JPY OTC","🟡 🇦🇺/🇺🇸 AUD/USD OTC","🟡 🇺🇸/🇯🇵 USD/JPY OTC","🟡 🇪🇺/🇬🇧 EUR/GBP OTC","🟡 🇺🇸/🇨🇭 USD/CHF OTC"];
+const otcPairs=["🟡 AUD/CAD OTC","🟡 AUD/CHF OTC","🟡 BHD/CNY OTC","🟡 CAD/CHF OTC","🟡 CAD/JPY OTC","🟡 CHF/NOK OTC","🟡 EUR/CHF OTC","🟡 EUR/RUB OTC","🟡 LBP/USD OTC","🟡 OMR/CNY OTC","🟡 SAR/CNY OTC","🟡 EUR/USD OTC","🟡 GBP/USD OTC","🟡 GBP/JPY OTC","🟡 EUR/JPY OTC","🟡 AUD/USD OTC","🟡 USD/JPY OTC","🟡 EUR/GBP OTC","🟡 USD/CHF OTC","🟡 AUD/JPY OTC","🟡 NZD/USD OTC","🟡 EUR/AUD OTC","🟡 GBP/AUD OTC","🟡 GBP/CHF OTC","🟡 USD/CAD OTC","🟡 EUR/CAD OTC","🟡 CHF/JPY OTC","🟡 NZD/JPY OTC","🟡 EUR/NZD OTC","🟡 GBP/NZD OTC"];
 let candleTimer=null;
 function loadMarkets(){
   let r=document.getElementById('realList');r.innerHTML='';
