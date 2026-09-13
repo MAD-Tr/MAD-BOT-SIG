@@ -25,7 +25,7 @@ MARKETS_REAL = {
     "🇺🇸/🇨🇭 USD/CHF": "USDCHF", "🇪🇺/🇨🇦 EUR/CAD": "EURCAD", "🇦🇺/🇨🇭 AUD/CHF": "AUDCHF",
     "🇬🇧/🇦🇺 GBP/AUD": "GBPAUD",
 }
-# OTC مع الاعلام مثل ما طلبت
+# OTC مع الاعلام
 MARKETS_OTC = {
     "🟡 🇪🇺/🇺🇸 EUR/USD OTC": "EURUSD",
     "🟡 🇬🇧/🇺🇸 GBP/USD OTC": "GBPUSD",
@@ -61,14 +61,6 @@ def get_confluence_signal(symbol):
         base = max(0, min(92, base))
         return d5, base, "H1:%s%% | 15m:%s%% | 5m:%s%%" % (p1h, p15, p5)
     return "NO_TRADE", 0, "متضارب"
-
-def format_signal_emoji(direction, percent):
-    if direction == "BUY":
-        return "🟢 BUY ↗️ %s%%" % percent
-    elif direction == "SELL":
-        return "🔴 SELL ↘️ %s%%" % percent
-    else:
-        return "%s %s%%" % (direction, percent)
 
 def main_menu(chat_id):
     if not bot: return
@@ -165,15 +157,26 @@ async function checkSingle(){
   resDiv.innerHTML='<div class="item" style="border-color:'+col+'"><span>'+pair+'</span><b style="color:'+col+'">'+data.dir_formatted+'</b></div><div style="font-size:10px;color:#666;margin-top:4px">'+data.detail+' • '+data.tf+'</div>';
 }
 async function checkAllMarkets(){
+  let btn=document.querySelector('.btn-red');
+  let originalText=btn?btn.innerText:'';
+  if(btn){btn.innerText='⏳ جاري فحص 27 سوق...';btn.disabled=true;}
   let all=realPairs.concat(otcPairs);
-  for(let i=0;i<all.length;i++){
-    let p=all[i];
-    let d=await fetchSignal(p);
+  let promises=all.map(async function(p){
+    try{
+      let d=await fetchSignal(p);
+      return {pair:p,data:d};
+    }catch(e){return {pair:p,data:null};}
+  });
+  let results=await Promise.all(promises);
+  results.forEach(function(r){
+    let p=r.pair;let d=r.data;
+    if(!d) return;
     let id=(p.indexOf('OTC')!==-1?'o_':'r_')+p;
     let el=document.getElementById(id);
     if(el){el.innerText=d.dir_formatted;el.style.color=d.dir.indexOf('BUY')!==-1?'#00ff00':'#ff0000';}
-  }
+  });
   document.getElementById('lastUpdate').innerText='آخر تحديث: '+new Date().toLocaleTimeString('ar-SA');
+  if(btn){btn.innerText=originalText||'🎯 فحص جميع الأسواق';btn.disabled=false;}
 }
 function updateClock(){
   function tick(){
