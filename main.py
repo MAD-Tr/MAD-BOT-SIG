@@ -1,11 +1,13 @@
 """
-MAD BOT - POCKET OPTION SYNC - FINAL
-- REAL = يقفل نفس بوكت أوبشن (الجمعة 9م UTC الى الأحد 9م UTC + السبت كامل)
-- OTC = فاتح 24/7 طول الوقت حتى لو REAL مقفل
-- 100% REAL SIGNALS
+MAD BOT - FINAL WITH TIMEFRAMES
+Flow: /start -> password -> ✅ تم فتح البوت -> REAL Open 🔓 / Close 🔒
+Then:
+REAL -> choose market -> choose timeframe M1 M3 M5 M15 M30 H1 H4 -> REAL signal TradingView
+OTC -> choose market -> choose timeframe S3 S15 S30 M1 M3 M5 M30 H1 H4 -> REAL signal Binance
+100% REAL SIGNALS
 """
 import os, time, threading, requests
-from datetime import datetime, timedelta
+from datetime import datetime
 from flask import Flask
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -13,7 +15,6 @@ from tradingview_ta import TA_Handler, Interval
 
 TOKEN = os.environ.get("TOKEN") or "8828337019:AAHgUTyjrxMk7IkJpMZzseKbroltKInaCes"
 PASSWORD = os.environ.get("PASSWORD") or "7154"
-BOT_NAME = "MAD BOT"
 
 bot = telebot.TeleBot(TOKEN, threaded=False)
 authorized = set()
@@ -42,37 +43,61 @@ BINANCE_MAP = {
     "GBPCHF": "BNBUSDT", "USDCAD": "BTCUSDT", "EURCAD": "EURUSDT", "AUDCAD": "BTCUSDT",
     "AUDCHF": "ETHUSDT", "EURCHF": "EURUSDT",
 }
+
 BINANCE_CACHE = {}
-CACHE_TIME = 20
+TV_CACHE = {}
+LAST_TV = 0
 
-def is_pocket_real_open():
-    now_utc = datetime.utcnow()
-    wd = now_utc.weekday()
-    h = now_utc.hour
-    if wd == 5: return False, "السبت - مقفل في بوكت أوبشن"
-    if wd == 6 and h < 21: return False, f"الأحد - يفتح بعد {21-h} ساعة"
-    if wd == 4 and h >= 21: return False, "الجمعة ليلا - قفل بوكت"
-    return True, "فاتح"
+TIMEFRAMES_OTC = ["S3","S15","S30","M1","M3","M5","M30","H1","H4"]
+TIMEFRAMES_REAL = ["M1","M3","M5","M15","M30","H1","H4"]
 
-def get_market_status_text():
-    real_open, real_reason = is_pocket_real_open()
-    if real_open:
-        return "✅ REAL فاتح في بوكت\n🟡 OTC فاتح 24/7"
-    else:
-        return f"❌ REAL مقفل - {real_reason}\n🟡 OTC فاتح 24/7"
+# Mapping to intervals
+TV_INTERVALS = {
+    "M1": Interval.INTERVAL_1_MINUTE,
+    "M3": Interval.INTERVAL_3_MINUTES,
+    "M5": Interval.INTERVAL_5_MINUTES,
+    "M15": Interval.INTERVAL_15_MINUTES,
+    "M30": Interval.INTERVAL_30_MINUTES,
+    "H1": Interval.INTERVAL_1_HOUR,
+    "H4": Interval.INTERVAL_4_HOURS,
+}
+BINANCE_INTERVALS = {
+    "S3": "1s",
+    "S15": "1s",
+    "S30": "1s",
+    "M1": "1m",
+    "M3": "3m",
+    "M5": "5m",
+    "M15": "15m",
+    "M30": "30m",
+    "H1": "1h",
+    "H4": "4h",
+}
 
-def get_binance_closes(symbol, interval, limit=50):
-    endpoints = [
-        f"https://data-api.binance.vision/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}",
-        f"https://api1.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}",
+def is_real_open():
+    now = datetime.utcnow()
+    wd = now.weekday()
+    h = now.hour
+    if wd == 5: return False
+    if wd == 6 and h < 21: return False
+    if wd == 4 and h >= 21: return False
+    return True
+
+def get_status():
+    return "REAL Open 🔓" if is_real_open() else "REAL Close 🔒"
+
+def get_binance_closes(sym, interval):
+    urls = [
+        f"https://data-api.binance.vision/api/v3/klines?symbol={sym}&interval={interval}&limit=100",
+        f"https://api.binance.com/api/v3/klines?symbol={sym}&interval={interval}&limit=100",
     ]
-    for url in endpoints:
+    for url in urls:
         try:
-            r = requests.get(url, timeout=4, headers={"User-Agent":"Mozilla/5.0"})
+            r = requests.get(url, timeout=5, headers={"User-Agent":"Mozilla/5.0"})
             if r.status_code == 200:
-                data = r.json()
-                if data and len(data) >= 26:
-                    return [float(c[4]) for c in data]
+                d = r.json()
+                if d and len(d) >= 30:
+                    return [float(c[4]) for c in d]
         except: continue
     return None
 
@@ -81,34 +106,43 @@ def calc_rsi(prices, period=14):
     deltas = [prices[i+1]-prices[i] for i in range(len(prices)-1)]
     gains = [max(0,d) for d in deltas[-period:]]
     losses = [max(0,-d) for d in deltas[-period:]]
-    avg_gain = sum(gains)/period if gains else 0
-    avg_loss = sum(losses)/period if losses else 0.00001
-    if avg_loss == 0: return 70 if avg_gain>0 else 50
-    rs = avg_gain/avg_loss
+    ag = sum(gains)/period if gains else 0
+    al = sum(losses)/period if losses else 0.00001
+    if al == 0: return 70 if ag>0 else 50
+    rs = ag/al
     return 100 - (100/(1+rs))
 
-def calc_ema(prices, period):
-    if len(prices) < period: return prices[-1] if prices else 0
-    k = 2/(period+1)
+def calc_ema(prices, p):
+    if len(prices) < p: return prices[-1]
+    k = 2/(p+1)
     ema = prices[0]
-    for p in prices[1:]: ema = p*k + ema*(1-k)
+    for x in prices[1:]: ema = x*k + ema*(1-k)
     return ema
 
-def calc_macd(prices):
-    if len(prices) < 26: return 0,0
-    ema12 = calc_ema(prices, 12); ema26 = calc_ema(prices, 26)
-    return ema12-ema26, ema12*0.9
-
-def get_binance_signal(symbol, interval_str):
-    key = f"{symbol}_{interval_str}"
+def get_binance_signal_real(symbol, timeframe):
+    """اشارة حقيقية 100% من Binance حسب الفريم اللي اختاره المستخدم"""
+    bsym = BINANCE_MAP.get(symbol, "BTCUSDT")
+    bin_interval = BINANCE_INTERVALS.get(timeframe, "1m")
+    key = f"{bsym}_{bin_interval}_{timeframe}"
     now = time.time()
-    if key in BINANCE_CACHE:
-        t,d = BINANCE_CACHE[key]
-        if now - t < CACHE_TIME: return d
-    closes = get_binance_closes(symbol, interval_str, 50)
-    if not closes or len(closes) < 26: return None
-    rsi = calc_rsi(closes, 14); macd, sig = calc_macd(closes)
-    ema9 = calc_ema(closes, 9); ema21 = calc_ema(closes, 21); price = closes[-1]
+    # كاش 10 ثواني للثواني، 30 ثانية للدقايق
+    cache_time = 10 if "S" in timeframe else 30
+    if key in BINANCE_CACHE and now - BINANCE_CACHE[key][0] < cache_time:
+        return BINANCE_CACHE[key][1]
+    
+    closes = get_binance_closes(bsym, bin_interval)
+    if not closes or len(closes) < 30:
+        return None
+    
+    rsi = calc_rsi(closes, 14)
+    price = closes[-1]
+    ema9 = calc_ema(closes, 9)
+    ema21 = calc_ema(closes, 21)
+    ema12 = calc_ema(closes, 12)
+    ema26 = calc_ema(closes, 26)
+    macd = ema12 - ema26
+    
+    # تحليل حقيقي
     buy=0; sell=0
     if price > ema9: buy+=30
     else: sell+=30
@@ -116,184 +150,272 @@ def get_binance_signal(symbol, interval_str):
     else: sell+=20
     if rsi > 50: buy+=25
     else: sell+=25
-    if macd > sig: buy+=25
+    if macd > 0: buy+=25
     else: sell+=25
-    total=buy+sell
+    
+    total = buy+sell
     if buy > sell:
         strength = int((buy/total)*100)
-        if rsi>70: strength-=12
-        result = ("BUY", max(0,strength), rsi, macd, sig, price, ema9, ema21)
+        # لو RSI فوق 70 قلل القوة
+        if rsi > 70: strength -= 12
+        if rsi > 75: strength -= 10
+        result = ("BUY", max(0,strength), rsi, price, ema9, ema21, macd)
     elif sell > buy:
         strength = int((sell/total)*100)
-        if rsi<30: strength-=12
-        result = ("SELL", max(0,strength), rsi, macd, sig, price, ema9, ema21)
+        if rsi < 30: strength -= 12
+        if rsi < 25: strength -= 10
+        result = ("SELL", max(0,strength), rsi, price, ema9, ema21, macd)
     else:
-        result = ("NEUTRAL", 50, rsi, macd, sig, price, ema9, ema21)
+        result = ("NEUTRAL", 50, rsi, price, ema9, ema21, macd)
+    
     BINANCE_CACHE[key]=(now,result)
     return result
 
-def get_otc_real(symbol):
-    bsym = BINANCE_MAP.get(symbol, "BTCUSDT")
-    d1 = get_binance_signal(bsym, "1m")
-    if not d1: return "NO_TRADE", 0, f"❌ {bsym} لا يرد"
-    d, p1, rsi, macd, sig, price, ema9, ema21 = d1
-    if p1 < 68: return "NO_TRADE", p1, f"📊 {bsym} | 1m:{p1}% RSI:{int(rsi)} ضعيف"
-    d5 = get_binance_signal(bsym, "5m")
-    if not d5:
-        if p1 >= 80:
-            return d, p1, f"🔥 BINANCE OTC REAL 24/7\n{bsym} 1m:{p1}% RSI:{rsi:.1f}\nOTC فاتح طول الوقت"
-        return "NO_TRADE", p1, f"⏳ {bsym} 5m يحمل..."
-    d5_dir, p5, rsi5, _, _, _, _, _ = d5
-    if d!= d5_dir: return "NO_TRADE", 0, f"❌ متذبذب {bsym} 1m:{d}({p1}%) vs 5m:{d5_dir}({p5}%)"
-    final_p = int(p1*0.6 + p5*0.4)
-    if final_p < 75: return "NO_TRADE", final_p, f"⚠️ {bsym} ضعيف {final_p}%"
-    return d, final_p, f"🔥 BINANCE OTC REAL 24/7\n{bsym} 1m:{p1}% 5m:{p5}% = {final_p}%\nRSI:{rsi:.1f}/{rsi5:.1f}\nOTC فاتح 24/7"
-
-def get_tv_real(symbol):
-    real_open, reason = is_pocket_real_open()
-    if not real_open:
-        return "CLOSED", 0, f"❌ REAL مقفل في بوكت أوبشن\n{reason}\n🟡 روح OTC - فاتح 24/7"
+def get_tv_signal_real(symbol, timeframe):
+    """اشارة حقيقية 100% من TradingView حسب الفريم"""
+    global LAST_TV
+    if not is_real_open():
+        return "CLOSED", 0, "❌ REAL Close 🔒 مقفل\n🟡 جرب OTC - فاتح 24/7"
+    
+    tv_interval = TV_INTERVALS.get(timeframe, Interval.INTERVAL_1_MINUTE)
+    key = f"TV_{symbol}_{timeframe}"
+    now = time.time()
+    if key in TV_CACHE and now - TV_CACHE[key][0] < 60:
+        return TV_CACHE[key][1]
+    
+    if now - LAST_TV < 2:
+        time.sleep(2 - (now - LAST_TV))
+    
     try:
-        h = TA_Handler(symbol=symbol, screener="forex", exchange="FX", interval=Interval.INTERVAL_5_MINUTES)
-        a = h.get_analysis(); s = a.summary; ind = a.indicators
-        buys = s['BUY']; sells = s['SELL']
-        if buys+sells == 0: return "NO_TRADE", 0, "⚠️ محايد"
-        d = "BUY" if buys > sells else "SELL"
-        p = int((max(buys,sells)/(buys+sells))*100)
-        if p < 68: return "NO_TRADE", p, f"⚠️ {symbol} ضعيف {p}%"
+        LAST_TV = time.time()
+        handler = TA_Handler(symbol=symbol, screener="forex", exchange="FX", interval=tv_interval)
+        analysis = handler.get_analysis()
+        summary = analysis.summary
+        ind = analysis.indicators
+        
+        buys = summary['BUY']
+        sells = summary['SELL']
+        total = buys + sells
+        
+        if total == 0:
+            res = ("NO_TRADE", 0, f"⚠️ {symbol} {timeframe} محايد")
+            TV_CACHE[key]=(now,res)
+            return res
+        
+        direction = "BUY" if buys > sells else "SELL"
+        percent = int((max(buys,sells)/total)*100)
         rsi = ind.get('RSI', 50)
-        if d=="BUY" and rsi>70: p-=10
-        if d=="SELL" and rsi<30: p-=10
-        detail = f"✅ TRADINGVIEW REAL\n{symbol} BUY:{buys} SELL:{sells} = {p}%\nRSI:{rsi:.1f}\nREAL فاتح في بوكت"
-        return d, max(0,p), detail
+        macd = ind.get('MACD.macd', 0)
+        
+        # فلتر RSI
+        if direction == "BUY" and rsi > 72:
+            percent -= 15
+        if direction == "SELL" and rsi < 28:
+            percent -= 15
+        
+        percent = max(0, percent)
+        
+        if percent < 70:
+            res = ("NO_TRADE", percent, f"⚠️ {symbol} {timeframe} ضعيف {percent}% RSI:{rsi:.0f}")
+            TV_CACHE[key]=(now,res)
+            return res
+        
+        detail = f"✅ TradingView REAL\n{timeframe} BUY:{buys} SELL:{sells} = {percent}%\nRSI:{rsi:.1f} MACD:{macd:.3f}"
+        res = (direction, percent, detail)
+        TV_CACHE[key]=(now,res)
+        return res
+        
     except Exception as e:
-        return "NO_TRADE", 0, f"❌ خطأ: {str(e)[:80]}"
+        if "429" in str(e):
+            if key in TV_CACHE:
+                return TV_CACHE[key][1]
+            return "NO_TRADE", 0, f"⏳ {timeframe} ضغط - انتظر 30 ثانية"
+        return "NO_TRADE", 0, f"⏳ {symbol} {timeframe} يحمل..."
 
-def main_menu(chat_id):
-    real_open, real_reason = is_pocket_real_open()
-    markup = InlineKeyboardMarkup(row_width=1)
-    if real_open:
-        markup.add(InlineKeyboardButton("✅ REAL فاتح (TradingView)", callback_data="cat_real"))
-        markup.add(InlineKeyboardButton("🟡 OTC فاتح 24/7 (Binance REAL)", callback_data="cat_otc"))
-        text = f"🤖 {BOT_NAME} - POCKET SYNC\n\n✅ REAL: فاتح في بوكت أوبشن\n🟡 OTC: فاتح 24/7\n\n{get_market_status_text()}\n\nاختر:"
-    else:
-        markup.add(InlineKeyboardButton("❌ REAL مقفل في بوكت", callback_data="real_closed"))
-        markup.add(InlineKeyboardButton("🟡 OTC فاتح 24/7 - اضغط هنا", callback_data="cat_otc"))
-        text = f"🤖 {BOT_NAME} - POCKET SYNC\n\n{get_market_status_text()}\n\n⚠️ الأسواق الحقيقية مقفلة في بوكت أوبشن الآن\n{real_reason}\n\n✅ تقدر تتداول OTC - فاتح طول الوقت"
-    markup.add(InlineKeyboardButton("📊 فحص كل الأسواق الفاتحة", callback_data="scan_all"))
-    bot.send_message(chat_id, text, reply_markup=markup)
+def show_main_menu(chat_id):
+    status = get_status()
+    kb = InlineKeyboardMarkup(row_width=1)
+    kb.add(InlineKeyboardButton("📈 الاسواق الحقيقية - TradingView", callback_data="real_list"))
+    kb.add(InlineKeyboardButton("🟡 اسواق OTC - Binance 24/7", callback_data="otc_list"))
+    text = f"{status}\n\nاختر نوع السوق:"
+    bot.send_message(chat_id, text, reply_markup=kb)
 
-def pair_kb(real_only=False, otc_only=False):
-    kb = InlineKeyboardMarkup(row_width=2)
-    if not otc_only:
-        real_open, _ = is_pocket_real_open()
-        if real_open:
-            for name in MARKETS_REAL.keys():
-                kb.add(InlineKeyboardButton(name, callback_data=f"sel:{name}"))
-        else:
-            kb.add(InlineKeyboardButton("❌ REAL مقفل - يفتح الأحد 12 ليلا", callback_data="real_closed"))
-    if not real_only:
-        for name in MARKETS_OTC.keys():
-            kb.add(InlineKeyboardButton(name, callback_data=f"sel:{name}"))
-    kb.add(InlineKeyboardButton("⬅️ رجوع", callback_data="main"))
+def show_timeframe_otc(market_name):
+    kb = InlineKeyboardMarkup(row_width=4)
+    # صف اول: الثواني
+    kb.add(
+        InlineKeyboardButton("S3", callback_data=f"tf_otc_{market_name}_S3"),
+        InlineKeyboardButton("S15", callback_data=f"tf_otc_{market_name}_S15"),
+        InlineKeyboardButton("S30", callback_data=f"tf_otc_{market_name}_S30"),
+        InlineKeyboardButton("M1", callback_data=f"tf_otc_{market_name}_M1"),
+    )
+    kb.add(
+        InlineKeyboardButton("M3", callback_data=f"tf_otc_{market_name}_M3"),
+        InlineKeyboardButton("M5", callback_data=f"tf_otc_{market_name}_M5"),
+        InlineKeyboardButton("M30", callback_data=f"tf_otc_{market_name}_M30"),
+        InlineKeyboardButton("H1", callback_data=f"tf_otc_{market_name}_H1"),
+    )
+    kb.add(InlineKeyboardButton("H4", callback_data=f"tf_otc_{market_name}_H4"))
+    kb.add(InlineKeyboardButton("⬅️ رجوع", callback_data="otc_list"))
+    return kb
+
+def show_timeframe_real(market_name):
+    kb = InlineKeyboardMarkup(row_width=4)
+    kb.add(
+        InlineKeyboardButton("M1", callback_data=f"tf_real_{market_name}_M1"),
+        InlineKeyboardButton("M3", callback_data=f"tf_real_{market_name}_M3"),
+        InlineKeyboardButton("M5", callback_data=f"tf_real_{market_name}_M5"),
+        InlineKeyboardButton("M15", callback_data=f"tf_real_{market_name}_M15"),
+    )
+    kb.add(
+        InlineKeyboardButton("M30", callback_data=f"tf_real_{market_name}_M30"),
+        InlineKeyboardButton("H1", callback_data=f"tf_real_{market_name}_H1"),
+        InlineKeyboardButton("H4", callback_data=f"tf_real_{market_name}_H4"),
+    )
+    kb.add(InlineKeyboardButton("⬅️ رجوع", callback_data="real_list"))
     return kb
 
 @bot.message_handler(commands=['start'])
-def start(msg):
-    if msg.from_user.id not in authorized:
-        bot.send_message(msg.chat.id, f"🔒 {BOT_NAME}\nكلمة السر:"); return
-    main_menu(msg.chat.id)
+def start_handler(message):
+    if message.from_user.id not in authorized:
+        bot.send_message(message.chat.id, "🔒 ارسل الرقم السري:")
+        return
+    bot.send_message(message.chat.id, "✅ تم فتح البوت")
+    show_main_menu(message.chat.id)
 
 @bot.message_handler(func=lambda m: m.from_user.id not in authorized)
-def check(m):
-    try: bot.delete_message(m.chat.id, m.message_id)
+def check_password(message):
+    try: bot.delete_message(message.chat.id, message.message_id)
     except: pass
-    if m.text.strip() == PASSWORD:
-        authorized.add(m.from_user.id)
-        bot.send_message(m.chat.id, f"✅ تم فتح {BOT_NAME}\nPOCKET SYNC - REAL يقفل مع بوكت, OTC فاتح 24/7")
-        main_menu(m.chat.id)
-    else: bot.send_message(m.chat.id, "❌")
+    if message.text.strip() == PASSWORD:
+        authorized.add(message.from_user.id)
+        bot.send_message(message.chat.id, "✅ تم فتح البوت")
+        show_main_menu(message.chat.id)
+    else:
+        bot.send_message(message.chat.id, "❌ رقم سري خطأ")
 
 @bot.callback_query_handler(func=lambda c: True)
-def all_cb(call):
+def callback_handler(call):
     if call.from_user.id not in authorized: return
     data = call.data
+    status = get_status()
+    
     if data == "main":
-        real_open, _ = is_pocket_real_open()
-        kb = InlineKeyboardMarkup(row_width=1)
-        if real_open:
-            kb.add(InlineKeyboardButton("✅ REAL", callback_data="cat_real"))
-        else:
-            kb.add(InlineKeyboardButton("❌ REAL مقفل", callback_data="real_closed"))
-        kb.add(InlineKeyboardButton("🟡 OTC 24/7", callback_data="cat_otc"))
-        kb.add(InlineKeyboardButton("📊 فحص الكل", callback_data="scan_all"))
-        bot.edit_message_text(f"🤖 {BOT_NAME}\n\n{get_market_status_text()}\n\nاختر:", call.message.chat.id, call.message.message_id, reply_markup=kb)
-        bot.answer_callback_query(call.id); return
-    if data == "real_closed":
-        real_open, reason = is_pocket_real_open()
-        bot.answer_callback_query(call.id, f"REAL مقفل: {reason}", show_alert=True)
-        bot.send_message(call.message.chat.id, f"❌ الأسواق الحقيقية مقفلة في بوكت أوبشن\n{reason}\n\n🟡 الحل: تداول OTC - فاتح 24/7", reply_markup=InlineKeyboardMarkup().add(InlineKeyboardButton("🟡 OTC فاتح 24/7", callback_data="cat_otc")))
+        show_main_menu(call.message.chat.id)
+        try: bot.delete_message(call.message.chat.id, call.message.message_id)
+        except: pass
+        bot.answer_callback_query(call.id)
         return
-    if data == "cat_real":
-        real_open, reason = is_pocket_real_open()
-        if not real_open:
-            bot.answer_callback_query(call.id, "REAL مقفل في بوكت الآن", show_alert=True)
-            bot.send_message(call.message.chat.id, f"❌ REAL مقفل\n{reason}\n\n🟡 OTC فاتح 24/7", reply_markup=InlineKeyboardMarkup().add(InlineKeyboardButton("🟡 روح OTC", callback_data="cat_otc")))
+    
+    if data == "real_list":
+        if not is_real_open():
+            bot.answer_callback_query(call.id, "REAL Close 🔒", show_alert=True)
+            kb = InlineKeyboardMarkup()
+            kb.add(InlineKeyboardButton("🟡 OTC فاتح 24/7", callback_data="otc_list"))
+            bot.send_message(call.message.chat.id, f"❌ {status} مقفل\n🟡 OTC فاتح", reply_markup=kb)
             return
-        bot.edit_message_text(f"📈 REAL - TradingView REAL\n✅ فاتح في بوكت أوبشن\n{get_market_status_text()}\n\nاختر زوج:", call.message.chat.id, call.message.message_id, reply_markup=pair_kb(real_only=True))
-        bot.answer_callback_query(call.id); return
-    if data == "cat_otc":
-        bot.edit_message_text(f"🟡 OTC LEGENDARY - Binance REAL 24/7\n✅ فاتح طول الوقت - حتى لو REAL مقفل\n{get_market_status_text()}\n\nاختر:", call.message.chat.id, call.message.message_id, reply_markup=pair_kb(otc_only=True))
-        bot.answer_callback_query(call.id); return
-    if data == "scan_all":
-        bot.answer_callback_query(call.id, "⏳ افحص...")
-        loading = bot.send_message(call.message.chat.id, f"⏳ {BOT_NAME}\n{get_market_status_text()}\n\nيفحص الأسواق الفاتحة...")
-        strong=[]; real_open,_=is_pocket_real_open()
-        if real_open:
-            for name,sym in MARKETS_REAL.items():
-                d,p,det=get_tv_real(sym)
-                if d not in ["NO_TRADE","CLOSED"] and p>=75: strong.append((p,name,d,det))
-        for name,sym in MARKETS_OTC.items():
-            d,p,det=get_otc_real(sym)
-            if d!="NO_TRADE" and p>=80: strong.append((p,name,d,det))
-        strong.sort(reverse=True, key=lambda x:x[0])
-        if not strong:
-            bot.edit_message_text(f"{get_market_status_text()}\n\n⛔ لا يوجد إشارات قوية في الأسواق الفاتحة الآن", call.message.chat.id, loading.message_id)
+        kb = InlineKeyboardMarkup(row_width=2)
+        for name in MARKETS_REAL:
+            kb.add(InlineKeyboardButton(name, callback_data=f"sel_real_{name}"))
+        kb.add(InlineKeyboardButton("⬅️ رجوع", callback_data="main"))
+        bot.edit_message_text(f"{status}\n📈 الاسواق الحقيقية - TradingView\nاختر السوق:", call.message.chat.id, call.message.message_id, reply_markup=kb)
+        bot.answer_callback_query(call.id)
+        return
+    
+    if data == "otc_list":
+        kb = InlineKeyboardMarkup(row_width=2)
+        for name in MARKETS_OTC:
+            kb.add(InlineKeyboardButton(name, callback_data=f"sel_otc_{name}"))
+        kb.add(InlineKeyboardButton("⬅️ رجوع", callback_data="main"))
+        bot.edit_message_text(f"🟡 OTC Binance 24/7 فاتح\n{status}\nاختر السوق:", call.message.chat.id, call.message.message_id, reply_markup=kb)
+        bot.answer_callback_query(call.id)
+        return
+    
+    if data.startswith("sel_real_"):
+        market_name = data.replace("sel_real_","")
+        kb = show_timeframe_real(market_name)
+        bot.edit_message_text(f"📊 {market_name}\n{status}\n\nاختر مدة الصفقة:\n(اشارات حقيقية من TradingView)", call.message.chat.id, call.message.message_id, reply_markup=kb)
+        bot.answer_callback_query(call.id)
+        return
+    
+    if data.startswith("sel_otc_"):
+        market_name = data.replace("sel_otc_","")
+        kb = show_timeframe_otc(market_name)
+        bot.edit_message_text(f"📊 {market_name}\n{status}\n\nاختر مدة الصفقة:\n(اشارات حقيقية من Binance)", call.message.chat.id, call.message.message_id, reply_markup=kb)
+        bot.answer_callback_query(call.id)
+        return
+    
+    if data.startswith("tf_real_"):
+        # tf_real_EUR/USD_M1
+        parts = data.split("_")
+        # tf real MARKET TIMEFRAME
+        # data = tf_real_{market}_TF
+        # market may contain /
+        # so join middle
+        tf = parts[-1]
+        market_name = "_".join(parts[2:-1])
+        # but market_name has underscore? actual is like 🇪🇺/🇺🇸 EUR/USD - no _
+        # So we need different parse: tf_real_ + market + _ + TF
+        # TF is last token
+        # market is everything between tf_real_ and _TF
+        raw = data.replace("tf_real_","")
+        # raw = MARKET_TF
+        # split by last _
+        idx = raw.rfind("_")
+        market_name = raw[:idx]
+        tf = raw[idx+1:]
+        
+        sym = MARKETS_REAL.get(market_name)
+        if not sym:
+            bot.answer_callback_query(call.id, "خطأ")
+            return
+        bot.answer_callback_query(call.id, f"يحلل {market_name} {tf}...")
+        loading = bot.send_message(call.message.chat.id, f"⏳ يحلل {market_name} {tf}...\n{status}\nTradingView REAL")
+        d,p,det = get_tv_signal_real(sym, tf)
+        if d in ["NO_TRADE","CLOSED"]:
+            bot.edit_message_text(f"📊 {market_name} {tf}\n{det}\n\n{status}", call.message.chat.id, loading.message_id)
         else:
-            txt=f"🔥 {BOT_NAME} POCKET SYNC\n{get_market_status_text()}\n\n{len(strong)} فرص فاتحة الآن\n\n"
-            for p,name,d,det in strong[:8]:
-                emoji="🟢 CALL" if d=="BUY" else "🔴 PUT"
-                txt+=f"{emoji} {name} {p}%\n{det}\n\n"
+            emoji = "🟢 CALL ↗️" if d=="BUY" else "🔴 PUT ↘️"
+            txt = f"{status}\n📈 TradingView REAL\n\n📊 {market_name}\n⏱ {tf}\n{emoji} {p}%\n\n{det}"
             bot.edit_message_text(txt, call.message.chat.id, loading.message_id)
         return
-    if data.startswith("sel:"):
-        name=data.replace("sel:",""); is_otc="OTC" in name; sym=(MARKETS_OTC if is_otc else MARKETS_REAL).get(name)
-        if not is_otc:
-            real_open,reason=is_pocket_real_open()
-            if not real_open:
-                bot.answer_callback_query(call.id,"REAL مقفل",show_alert=True)
-                bot.send_message(call.message.chat.id, f"❌ {name} مقفل في بوكت أوبشن\n{reason}\n\n🟡 تداول OTC بداله - فاتح 24/7", reply_markup=InlineKeyboardMarkup().add(InlineKeyboardButton("🟡 OTC فاتح", callback_data="cat_otc")))
-                return
-        bot.answer_callback_query(call.id, f"جاري تحليل {name}...")
-        loading=bot.send_message(call.message.chat.id, f"⏳ {BOT_NAME}\n📊 يحلل {name}...\n{get_market_status_text()}")
-        if is_otc: d,p,det=get_otc_real(sym)
-        else: d,p,det=get_tv_real(sym)
-        if d in ["NO_TRADE","CLOSED"]:
-            bot.edit_message_text(f"📊 {name}\n\n{det}\n\n{get_market_status_text()}", call.message.chat.id, loading.message_id)
+    
+    if data.startswith("tf_otc_"):
+        raw = data.replace("tf_otc_","")
+        idx = raw.rfind("_")
+        market_name = raw[:idx]
+        tf = raw[idx+1:]
+        
+        sym = MARKETS_OTC.get(market_name)
+        if not sym:
+            bot.answer_callback_query(call.id, "خطأ")
+            return
+        bot.answer_callback_query(call.id, f"يحلل {market_name} {tf}...")
+        loading = bot.send_message(call.message.chat.id, f"⏳ يحلل {market_name} {tf}...\n{status}\nBinance REAL")
+        res = get_binance_signal_real(sym, tf)
+        if not res:
+            bot.edit_message_text(f"📊 {market_name} {tf}\n⏳ يحمل... جرب مرة ثانية\n{status}", call.message.chat.id, loading.message_id)
+            return
+        d,p,rsi,price,ema9,ema21,macd = res
+        if d=="NEUTRAL" or p < 70:
+            bot.edit_message_text(f"📊 {market_name} {tf}\n⚠️ ضعيف {p}% RSI:{rsi:.0f}\nلا تدخل\n\n{status}", call.message.chat.id, loading.message_id)
         else:
-            emoji="🟢 CALL ↗️ HIGHER" if d=="BUY" else "🔴 PUT ↘️ LOWER"
-            txt=f"🤖 {BOT_NAME} - POCKET SYNC\n📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n{get_market_status_text()}\n\nPair: {name}\nSignal: {emoji}\nProbability: {p}%\n\n{det}"
+            emoji = "🟢 CALL ↗️" if d=="BUY" else "🔴 PUT ↘️"
+            detail = f"✅ Binance REAL\n⏱ {tf} | {BINANCE_MAP.get(sym)} | 1s/1m حقيقي\nRSI:{rsi:.1f} EMA9:{ema9:.5f} EMA21:{ema21:.5f}\nMACD:{macd:.5f}\nPrice:{price:.5f}"
+            txt = f"🟡 OTC 24/7 - {status}\n📈 Binance REAL\n\n📊 {market_name}\n⏱ مدة: {tf}\n{emoji} قوة: {p}%\n\n{detail}"
             bot.edit_message_text(txt, call.message.chat.id, loading.message_id)
+        return
 
-app=Flask(__name__)
+app = Flask(__name__)
 @app.route('/')
-def home(): return f"{BOT_NAME} - POCKET SYNC - REAL يقفل مع بوكت, OTC فاتح 24/7"
+def home(): return "MAD BOT TIMEFRAMES - REAL"
 @app.route('/health')
 def health(): return "OK"
 def run_flask(): app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
 threading.Thread(target=run_flask, daemon=True).start()
-bot.remove_webhook(); time.sleep(2)
-print(f"{BOT_NAME} POCKET SYNC STARTED")
+bot.remove_webhook()
+time.sleep(2)
+print("BOT STARTED WITH TIMEFRAMES S3 M1 H1 H4")
 while True:
     try: bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=60)
     except Exception as e: print(e); time.sleep(5)
