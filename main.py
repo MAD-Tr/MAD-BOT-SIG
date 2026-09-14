@@ -321,12 +321,34 @@ def health(): return "OK"
 def run_flask():
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
 threading.Thread(target=run_flask, daemon=True).start()
-try: bot.remove_webhook()
-except Exception as e: print(f"webhook remove failed: {e}")
+# Fix 409 Conflict - delete webhook properly and handle multiple instances
+try:
+    bot.remove_webhook()
+    time.sleep(1)
+    # Also delete via API to ensure no webhook
+    import requests as _r
+    try:
+        _r.get(f"https://api.telegram.org/bot{TOKEN}/deleteWebhook?drop_pending_updates=True", timeout=5)
+    except: pass
+except Exception as e:
+    print(f"webhook remove failed: {e}")
+
 time.sleep(1)
-print("BOT STARTED FIXED")
+print("BOT STARTED FIXED - ANTI 409")
+
 while True:
-    try: bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=60)
+    try:
+        bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=60)
     except Exception as e:
-        print(f"polling error: {e}")
-        time.sleep(5)
+        err = str(e)
+        print(f"polling error: {err}")
+        if "409" in err or "Conflict" in err:
+            print("409 Conflict detected - waiting 10 sec and retrying...")
+            # Try to clear webhook again
+            try:
+                import requests as _r
+                _r.get(f"https://api.telegram.org/bot{TOKEN}/deleteWebhook?drop_pending_updates=True", timeout=5)
+            except: pass
+            time.sleep(10)
+        else:
+            time.sleep(5)
