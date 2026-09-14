@@ -53,7 +53,8 @@ TV_INTERVALS = {
     "M30": Interval.INTERVAL_30_MINUTES, "H1": Interval.INTERVAL_1_HOUR, "H4": Interval.INTERVAL_4_HOURS,
 }
 BINANCE_INTERVALS = {
-    "S3": "1s", "S15": "1s", "S30": "1s", "M1": "1m", "M3": "3m", "M5": "5m", "M15": "15m", "M30": "30m", "H1": "1h", "H4": "4h",
+    "S3": "1s", "S15": "1s", "S30": "1s",
+    "M1": "1m", "M3": "3m", "M5": "5m", "M15": "15m", "M30": "30m", "H1": "1h", "H4": "4h",
 }
 
 def is_real_open():
@@ -321,7 +322,7 @@ def run_flask():
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
 threading.Thread(target=run_flask, daemon=True).start()
 try: bot.remove_webhook()
-except: pass
+except Exception as e: print(f"webhook remove failed: {e}")
 time.sleep(1)
 print("BOT STARTED FIXED")
 while True:
