@@ -3,7 +3,17 @@ from datetime import datetime
 from flask import Flask
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-from tradingview_ta import TA_Handler, Interval
+
+# حاول استيراد tradingview - لو فشل لا يطيح البوت
+try:
+    from tradingview_ta import TA_Handler, Interval
+    TV_AVAILABLE = True
+    print("TradingView available")
+except Exception as e:
+    print(f"TradingView not available: {e}")
+    TV_AVAILABLE = False
+    TA_Handler = None
+    Interval = None
 
 TOKEN = os.environ.get("TOKEN") or "8828337019:AAHgUTyjrxMk7IkJpMZzseKbroltKInaCes"
 PASSWORD = os.environ.get("PASSWORD") or "7154"
@@ -47,11 +57,15 @@ BINANCE_CACHE = {}
 TV_CACHE = {}
 LAST_TV = 0
 
-TV_INTERVALS = {
-    "M1": Interval.INTERVAL_1_MINUTE, "M3": Interval.INTERVAL_3_MINUTES,
-    "M5": Interval.INTERVAL_5_MINUTES, "M15": Interval.INTERVAL_15_MINUTES,
-    "M30": Interval.INTERVAL_30_MINUTES, "H1": Interval.INTERVAL_1_HOUR, "H4": Interval.INTERVAL_4_HOURS,
-}
+if TV_AVAILABLE:
+    TV_INTERVALS = {
+        "M1": Interval.INTERVAL_1_MINUTE, "M3": Interval.INTERVAL_3_MINUTES,
+        "M5": Interval.INTERVAL_5_MINUTES, "M15": Interval.INTERVAL_15_MINUTES,
+        "M30": Interval.INTERVAL_30_MINUTES, "H1": Interval.INTERVAL_1_HOUR, "H4": Interval.INTERVAL_4_HOURS,
+    }
+else:
+    TV_INTERVALS = {}
+
 BINANCE_INTERVALS = {
     "S3": "1s", "S15": "1s", "S30": "1s",
     "M1": "1m", "M3": "3m", "M5": "5m", "M15": "15m", "M30": "30m", "H1": "1h", "H4": "4h",
@@ -142,6 +156,14 @@ def get_binance_signal_real(symbol_display, timeframe):
     return result
 
 def get_tv_signal_real(symbol_display, timeframe):
+    if not TV_AVAILABLE:
+        # لو TradingView مو متاح استخدم Binance بداله
+        res = get_binance_signal_real(symbol_display, timeframe)
+        if not res: return "NO_TRADE", 0, f"{symbol_display} {timeframe} يحمل..."
+        d,p,rsi,price,ema9,ema21,macd = res
+        if d=="NEUTRAL": return "NO_TRADE", p, f"{symbol_display} {timeframe} محايد {p}%"
+        return d,p,f"Binance Fallback {timeframe} = {p}% RSI:{rsi:.1f} (TV غير متاح)"
+    
     global LAST_TV
     if not is_real_open():
         return "CLOSED", 0, "REAL Close 🔒 مقفل"
@@ -183,7 +205,7 @@ def get_tv_signal_real(symbol_display, timeframe):
         if "429" in str(e):
             if key in TV_CACHE: return TV_CACHE[key][1]
             return "NO_TRADE", 0, "ضغط سيرفر انتظر 30ث"
-        return "NO_TRADE", 0, f"{symbol_display} يحمل..."
+        return "NO_TRADE", 0, f"{symbol_display} يحمل... {e}"
 
 def show_main_menu(chat_id):
     status = get_status()
@@ -315,27 +337,28 @@ def callback_handler(call):
 
 app = Flask(__name__)
 @app.route('/')
-def home(): return "MAD BOT FIXED - DEPLOY OK"
+def home(): return "MAD BOT FIXED - NO CRASH"
 @app.route('/health')
 def health(): return "OK"
+
 def run_flask():
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    try:
+        app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    except Exception as e:
+        print(f"Flask error: {e}")
+
 threading.Thread(target=run_flask, daemon=True).start()
-# Fix 409 Conflict - delete webhook properly and handle multiple instances
+
 try:
     bot.remove_webhook()
     time.sleep(1)
-    # Also delete via API to ensure no webhook
-    import requests as _r
     try:
-        _r.get(f"https://api.telegram.org/bot{TOKEN}/deleteWebhook?drop_pending_updates=True", timeout=5)
+        requests.get(f"https://api.telegram.org/bot{TOKEN}/deleteWebhook?drop_pending_updates=True", timeout=5)
     except: pass
 except Exception as e:
     print(f"webhook remove failed: {e}")
 
-time.sleep(1)
-print("BOT STARTED FIXED - ANTI 409")
-
+print("BOT STARTED - ANTI CRASH VERSION")
 while True:
     try:
         bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=60)
@@ -343,11 +366,8 @@ while True:
         err = str(e)
         print(f"polling error: {err}")
         if "409" in err or "Conflict" in err:
-            print("409 Conflict detected - waiting 10 sec and retrying...")
-            # Try to clear webhook again
             try:
-                import requests as _r
-                _r.get(f"https://api.telegram.org/bot{TOKEN}/deleteWebhook?drop_pending_updates=True", timeout=5)
+                requests.get(f"https://api.telegram.org/bot{TOKEN}/deleteWebhook?drop_pending_updates=True", timeout=5)
             except: pass
             time.sleep(10)
         else:
