@@ -1,93 +1,179 @@
-import os, random, threading
+import os
+import time
+import threading
 from flask import Flask
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo, Update
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
+import telebot
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from tradingview_ta import TA_Handler, Interval
 
-TOKEN = os.getenv("BOT_TOKEN","").strip()
-PASSWORD = os.getenv("PASSWORD","").strip()
-GITHUB_USER = os.getenv("GITHUB_USER","MAD-Tr")
-PORT = int(os.getenv("PORT",10000))
+TOKEN = os.environ.get("TOKEN") or "8828337019:AAGZeXc-zg8gQW6sCuxnIgFHTdN15Y95LB4"
+PASSWORD = os.environ.get("PASSWORD") or "7154"
+bot = telebot.TeleBot(TOKEN, threaded=False)
 
-print(f"=== START ===")
-print(f"BOT_TOKEN exists: {bool(TOKEN)} len={len(TOKEN) if TOKEN else 0}")
-print(f"PASSWORD exists: {bool(PASSWORD)}")
-
-app_flask = Flask(__name__)
-@app_flask.route('/')
-def home(): return f"Live Token:{bool(TOKEN)}"
-
-MARKETS_REAL = {
-    "EUR/USD":"🇪🇺/🇺🇸","GBP/USD":"🇬🇧/🇺🇸","USD/JPY":"🇺🇸/🇯🇵","AUD/USD":"🇦🇺/🇺🇸",
-    "USD/CHF":"🇺🇸/🇨🇭","USD/CAD":"🇺🇸/🇨🇦","NZD/USD":"🇳🇿/🇺🇸","EUR/JPY":"🇪🇺/🇯🇵",
-    "EUR/GBP":"🇪🇺/🇬🇧","GBP/JPY":"🇬🇧/🇯🇵","AUD/JPY":"🇦🇺/🇯🇵","EUR/AUD":"🇪🇺/🇦🇺",
-    "GBP/AUD":"🇬🇧/🇦🇺","EUR/CAD":"🇪🇺/🇨🇦","GBP/CAD":"🇬🇧/🇨🇦","AUD/CAD":"🇦🇺/🇨🇦",
-    "EUR/CHF":"🇪🇺/🇨🇭","GBP/CHF":"🇬🇧/🇨🇭","AUD/CHF":"🇦🇺/🇨🇭","NZD/JPY":"🇳🇿/🇯🇵",
-    "EUR/NZD":"🇪🇺/🇳🇿","GBP/NZD":"🇬🇧/🇳🇿","AUD/NZD":"🇦🇺/🇳🇿","CHF/JPY":"🇨🇭/🇯🇵"
+MARKETS = {
+    "🇪🇺/🇺🇸 EUR/USD": "EURUSD", "🇬🇧/🇺🇸 GBP/USD": "GBPUSD", "🇺🇸/🇯🇵 USD/JPY": "USDJPY",
+    "🇦🇺/🇺🇸 AUD/USD": "AUDUSD", "🇺🇸/🇨🇦 USD/CAD": "USDCAD", "🇪🇺/🇯🇵 EUR/JPY": "EURJPY",
+    "🇨🇦/🇯🇵 CAD/JPY": "CADJPY", "🇪🇺/🇬🇧 EUR/GBP": "EURGBP", "🇦🇺/🇯🇵 AUD/JPY": "AUDJPY",
+    "🇳🇿/🇺🇸 NZD/USD": "NZDUSD", "🇪🇺/🇨🇭 EUR/CHF": "EURCHF", "🇬🇧/🇯🇵 GBP/JPY": "GBPJPY",
+    "🇦🇺/🇨🇦 AUD/CAD": "AUDCAD", "🇪🇺/🇦🇺 EUR/AUD": "EURAUD", "🇬🇧/🇨🇭 GBP/CHF": "GBPCHF",
+    "🇺🇸/🇨🇭 USD/CHF": "USDCHF", "🇪🇺/🇨🇦 EUR/CAD": "EURCAD", "🇦🇺/🇨🇭 AUD/CHF": "AUDCHF",
+    "🇬🇧/🇦🇺 GBP/AUD": "GBPAUD", "🇨🇦/🇨🇭 CAD/CHF": "CADCHF", "🇪🇺/🇳🇿 EUR/NZD": "EURNZD",
+    "🇬🇧/🇳🇿 GBP/NZD": "GBPNZD",
 }
-MARKETS_OTC = {k+" OTC":v+" OTC" for k,v in MARKETS_REAL.items()}
 
-def get_tv(m):
+user_data = {}
+last_request = {}
+authorized = set()
+
+def get_tf_signal(symbol, interval):
     try:
-        from tradingview_ta import TA_Handler, Interval
-        h=TA_Handler(symbol=m.replace(" OTC","").replace("/",""), exchange="FX", screener="forex", interval=Interval.INTERVAL_1_MINUTE)
-        a=h.get_analysis()
-        return ("CALL" if a.indicators["close"]>a.indicators["EMA20"] else "PUT"), "2m", f"RSI:{a.indicators['RSI']:.0f}"
+        h = TA_Handler(symbol=symbol, screener="forex", exchange="FX", interval=interval)
+        s = h.get_analysis().summary
+        buys, sells = s['BUY'], s['SELL']
+        if buys+sells == 0: return "NEUTRAL", 50
+        direction = "BUY" if buys > sells else "SELL"
+        percent = int((max(buys, sells) / (buys + sells)) * 100)
+        return direction, percent
     except:
-        return ("CALL" if random.random()>0.5 else "PUT"), "2m", "sim"
+        return "ERROR", 0
 
-def main_kb():
-    url=f"https://{GITHUB_USER}.github.io/MAD-BOT-SIG/mini_app/"
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🚀 فتح التطبيق المصغر", web_app=WebAppInfo(url=url))],
-        [InlineKeyboardButton("📈 حقيقية 24", callback_data="ALL_REAL"), InlineKeyboardButton("⚡ OTC 24", callback_data="ALL_OTC")],
-        [InlineKeyboardButton("🎯 عشوائي", callback_data="RANDOM")]
-    ])
+def get_confluence_signal(symbol):
+    d5, p5 = get_tf_signal(symbol, Interval.INTERVAL_5_MINUTES)
+    d15, p15 = get_tf_signal(symbol, Interval.INTERVAL_15_MINUTES)
+    d1h, p1h = get_tf_signal(symbol, Interval.INTERVAL_1_HOUR)
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if PASSWORD:
-        if context.args and context.args[0]==PASSWORD:
-            context.user_data['auth']=True
-            await update.message.reply_text("✅ تم فتح البوت", reply_markup=main_kb()); return
-        if context.user_data.get('auth'):
-            await update.message.reply_text("🤖 جاهز ✅", reply_markup=main_kb()); return
-        await update.message.reply_text("🔒 ادخل الرقم السري للبوت"); return
-    await update.message.reply_text("🤖 جاهز ✅ 48 سوق", reply_markup=main_kb())
+    if d5 == d15 == d1h and d5!= "ERROR":
+        base = int(p5*0.30 + p15*0.35 + p1h*0.35)
+        diff = max(p5, p15, p1h) - min(p5, p15, p1h)
+        if diff > 20: base -= 8
+        elif diff > 12: base -= 4
+        if min(p5, p15, p1h) < 65: base -= 8
+        if base > 92: base = 92
+        if base < 0: base = 0
+        final = base
 
-async def check_pass(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not PASSWORD or context.user_data.get('auth'): return
-    if update.message.text.strip()==PASSWORD:
-        context.user_data['auth']=True
-        await update.message.reply_text("✅ تم فتح البوت", reply_markup=main_kb())
+        if final >= 85:
+            decision = "🔥🔥 ممتاز جدا - TOP ادخل 2% 🔥🔥"
+        elif final >= 78:
+            decision = "✅ ممتاز - ادخل 1.5%"
+        elif final >= 70:
+            decision = "✅ جيد - ادخل 1%"
+        else:
+            decision = "⚠️ متوسط - لا تدخل"
+
+        return d5, final, f"H1:{p1h}% | 15m:{p15}% | 5m:{p5}%\n{decision}"
+
+    return "NO_TRADE", 0, f"H1:{p1h}% {d1h} | 15m:{p15}% {d15} | 5m:{p5}% {d5}\n\n❌ متضارب"
+
+def main_menu(chat_id):
+    markup = InlineKeyboardMarkup(row_width=1)
+    markup.add(InlineKeyboardButton("🔥 البحث عن الفرصة الذهبية (22 سوق)", callback_data="golden"))
+    markup.add(InlineKeyboardButton("📊 فحص سوق واحد", callback_data="single"))
+    bot.send_message(chat_id, "💰 بوت احترافي اختار", reply_markup=markup)
+
+@bot.message_handler(commands=['start'])
+def start(msg):
+    if msg.from_user.id not in authorized:
+        bot.send_message(msg.chat.id, "🔒 ارسل كلمة السر:")
+        return
+    main_menu(msg.chat.id)
+
+@bot.message_handler(func=lambda m: m.from_user.id not in authorized)
+def check_pass(m):
+    if m.text.strip() == PASSWORD:
+        authorized.add(m.from_user.id)
+        bot.send_message(m.chat.id, "✅ تم فتح البوت")
+        main_menu(m.chat.id)
     else:
-        await update.message.reply_text("❌ الرقم غلط")
+        bot.send_message(m.chat.id, "❌ كلمة سر غلط")
 
-async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q=update.callback_query; await q.answer()
-    if PASSWORD and not context.user_data.get('auth'):
-        await q.message.reply_text("🔒 ادخل الرقم السري أولاً"); return
-    if q.data=="ALL_REAL":
-        txt="📈 24 حقيقي:\n\n"
-        for m,f in MARKETS_REAL.items():
-            s,e,i=get_tv(m); txt+=f"{f} {m}: {s} {e} {i}\n"
-        await q.message.reply_text(txt)
-    elif q.data=="ALL_OTC":
-        txt="⚡ 24 OTC:\n\n"
-        for m in MARKETS_OTC:
-            txt+=f"{m}: {random.choice(['CALL','PUT'])} {random.randint(75,92)}%\n"
-        await q.message.reply_text(txt)
+@bot.callback_query_handler(func=lambda c: c.data=="single")
+def single(call):
+    if call.from_user.id not in authorized: return
+    bot.answer_callback_query(call.id)
+    markup = InlineKeyboardMarkup(row_width=2)
+    for name in MARKETS:
+        markup.add(InlineKeyboardButton(name, callback_data=f"market_{name}"))
+    bot.send_message(call.message.chat.id, "اختر السوق:", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda c: c.data=="golden")
+def golden(call):
+    if call.from_user.id not in authorized: return
+    bot.answer_callback_query(call.id, "⏳ افحص 22 سوق...")
+    loading = bot.send_message(call.message.chat.id, f"⏳ افحص {len(MARKETS)} سوق (25 ثانية)...")
+    goldens = []
+    start_t = time.time()
+    for name, sym in MARKETS.items():
+        try:
+            d, p, details = get_confluence_signal(sym)
+            if d!= "NO_TRADE" and p >= 70:
+                emoji = "🟢 BUY" if d=="BUY" else "🔴 SELL"
+                goldens.append((p, f"{emoji} {name} - {p}%\n{details}\n"))
+        except: continue
+
+    goldens.sort(key=lambda x: x[0], reverse=True)
+    elapsed = round(time.time() - start_t, 1)
+    if not goldens:
+        bot.edit_message_text(f"❌ فحصت {len(MARKETS)} سوق في {elapsed}ث - لا يوجد موثوق حاليا\nجرب بعد 5 دقايق", call.message.chat.id, loading.message_id)
     else:
-        m=random.choice(list(MARKETS_REAL.keys())); s,e,i=get_tv(m)
-        await q.message.reply_text(f"🎯 {m}: {s} {e} {i}")
+        best = goldens[0]
+        text = f"🏆 أفضل صفقة موثوقة {best[0]}% 🏆\n{best[1]}\n"
+        text += f"━━━━━━━━━━━━\n🔥🔥 {len(goldens)} فرص مرتبة حسب الثقة في {elapsed}ث 🔥🔥\n\n"
+        for i, (p, detail) in enumerate(goldens, 1):
+            crown = "👑" if i==1 else f"{i}."
+            text += f"{crown} {detail}\n"
+        text += f"\n💡 نصيحة: ادخل رقم 1 فقط - أعلى ثقة"
+        bot.edit_message_text(text, call.message.chat.id, loading.message_id)
 
-def run_bot():
-    if not TOKEN:
-        print("❌ BOT_TOKEN مو موجود"); return
-    app=Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(btn))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, check_pass))
-    print("🤖 يعمل"); app.run_polling()
+@bot.callback_query_handler(func=lambda c: c.data.startswith("market_"))
+def choose_market(call):
+    if call.from_user.id not in authorized: return
+    bot.answer_callback_query(call.id)
+    name = call.data.replace("market_", "")
+    user_data[call.from_user.id] = MARKETS[name], name
+    markup = InlineKeyboardMarkup(row_width=1)
+    markup.add(InlineKeyboardButton("🔍 فحص شامل H1+15m+5m", callback_data="time_ALL"))
+    markup.add(InlineKeyboardButton("5m فقط", callback_data="time_5"), InlineKeyboardButton("15m فقط", callback_data="time_15"))
+    bot.send_message(call.message.chat.id, f"اخترت {name}\nاختر نوع الفحص:", reply_markup=markup)
 
-if __name__=="__main__":
-    threading.Thread(target=run_bot, daemon=True).start()
-    app_flask.run(host="0.0.0.0", port=PORT)
+@bot.callback_query_handler(func=lambda c: c.data.startswith("time_"))
+def choose_time(call):
+    if call.from_user.id not in authorized: return
+    user_id = call.from_user.id
+    now = time.time()
+    if user_id in last_request and now - last_request[user_id] < 3:
+        bot.answer_callback_query(call.id, "⏳ انتظر 3 ثواني")
+        return
+    last_request[user_id] = now
+    bot.answer_callback_query(call.id)
+    mode = call.data.replace("time_", "")
+    symbol, name = user_data.get(user_id, (None, None))
+    if not symbol: return
+    loading = bot.send_message(call.message.chat.id, f"⏳ جاري فحص {name}...")
+    if mode == "ALL":
+        direction, percent, details = get_confluence_signal(symbol)
+        if direction == "NO_TRADE":
+            bot.edit_message_text(f"📊 {name}\n{details}", call.message.chat.id, loading.message_id)
+            return
+        emoji = "🟢 BUY صعود" if direction == "BUY" else "🔴 SELL هبوط"
+        bot.edit_message_text(f"📊 {name}\n{emoji}\n💪 ثقة: {percent}%\n\n{details}", call.message.chat.id, loading.message_id)
+    else:
+        tf_map = {"5": Interval.INTERVAL_5_MINUTES, "15": Interval.INTERVAL_15_MINUTES}
+        d, p = get_tf_signal(symbol, tf_map[mode])
+        bot.edit_message_text(f"📊 {name} {mode}m\n{'🟢 BUY' if d=='BUY' else '🔴 SELL'}\n💪 {p}%\n\n{'✅ ادخل' if p>=70 else '❌ لا تدخل'}", call.message.chat.id, loading.message_id)
+
+app = Flask(__name__)
+@app.route('/')
+def home(): return "Bot is Live!"
+def run_flask():
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
+threading.Thread(target=run_flask, daemon=True).start()
+bot.remove_webhook()
+time.sleep(2)
+while True:
+    try:
+        bot.infinity_polling(skip_pending=True, timeout=60, long_polling_timeout=60)
+    except Exception as e:
+        print(f"Error: {e}")
+        time.sleep(5)
