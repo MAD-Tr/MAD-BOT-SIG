@@ -8,7 +8,7 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 
 load_dotenv()
 
-TOKEN = os.getenv("8828337019:AAHgUTyjrxMk7IkJpMZzseKbroltKInaCes")
+TOKEN = os.getenv("8828337019:AAE03YhnaMnRuWWu1U4eqdTZSgHVAoGCLuI")
 PASSWORD = os.getenv("7154")
 PORT = int(os.getenv("PORT", 10000))
 
