@@ -1,24 +1,24 @@
 import os
-import asyncio
 import random
-from datetime import datetime
+import threading
+from flask import Flask
 from dotenv import load_dotenv
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo, Update
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
-load_dotenv() # يقرأ من ملف.env
+load_dotenv()
 
-# ===== التوكن والرقم السري مخفي - ما يظهر في GitHub =====
-TOKEN = os.getenv("8828337019:AAHgUTyjrxMk7IkJpMZzseKbroltKInaCes") # حطه في.env
-PASSWORD = os.getenv("7154") # رقم سري مخفي
-ADMIN_ID = os.getenv("ADMIN_ID", "")
+TOKEN = os.getenv("8828337019:AAHgUTyjrxMk7IkJpMZzseKbroltKInaCes")
+PASSWORD = os.getenv("7154")
+PORT = int(os.getenv("PORT", 10000))
 
-if not TOKEN:
-    print("❌ حط التوكن في ملف.env")
-    print("BOT_TOKEN=123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11")
-    exit()
+# Flask عشان Render ما يقول exited early
+app_flask = Flask(__name__)
+@app_flask.route('/')
+def home():
+    return "🤖 MAD-BOT-SIG Live - نفس aitradeforge_bot - 24 REAL + 24 OTC"
 
-# ===== 24 سوق حقيقي - TradingView =====
+# ===== 24 سوق حقيقي =====
 MARKETS_REAL = {
     "EUR/USD": "🇪🇺/🇺🇸", "GBP/USD": "🇬🇧/🇺🇸", "USD/JPY": "🇺🇸/🇯🇵", "AUD/USD": "🇦🇺/🇺🇸",
     "USD/CHF": "🇺🇸/🇨🇭", "USD/CAD": "🇺🇸/🇨🇦", "NZD/USD": "🇳🇿/🇺🇸", "EUR/JPY": "🇪🇺/🇯🇵",
@@ -27,7 +27,6 @@ MARKETS_REAL = {
     "EUR/CHF": "🇪🇺/🇨🇭", "GBP/CHF": "🇬🇧/🇨🇭", "AUD/CHF": "🇦🇺/🇨🇭", "NZD/JPY": "🇳🇿/🇯🇵",
     "EUR/NZD": "🇪🇺/🇳🇿", "GBP/NZD": "🇬🇧/🇳🇿", "AUD/NZD": "🇦🇺/🇳🇿", "CHF/JPY": "🇨🇭/🇯🇵"
 }
-# ===== 24 سوق OTC - من آخر شمعة Pocket Option =====
 MARKETS_OTC = {
     "EUR/USD OTC": "🇪🇺/🇺🇸 OTC", "GBP/USD OTC": "🇬🇧/🇺🇸 OTC", "USD/JPY OTC": "🇺🇸/🇯🇵 OTC", "AUD/USD OTC": "🇦🇺/🇺🇸 OTC",
     "USD/CHF OTC": "🇺🇸/🇨🇭 OTC", "USD/CAD OTC": "🇺🇸/🇨🇦 OTC", "NZD/USD OTC": "🇳🇿/🇺🇸 OTC", "EUR/JPY OTC": "🇪🇺/🇯🇵 OTC",
@@ -57,12 +56,9 @@ def get_otc(market):
     e="2m" if imp>70 else "6m"; return s,e,imp,{'open':o,'high':h,'low':l,'close':c}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if PASSWORD:
-        if context.args and context.args[0]!= PASSWORD:
-            await update.message.reply_text("🔒 الرقم السري خطأ"); return
     kb=[[InlineKeyboardButton("🚀 فتح التطبيق - نفس aitradeforge_bot", web_app=WebAppInfo(url=f"https://{os.getenv('GITHUB_USER','MAD-Tr')}.github.io/MAD-BOT-SIG/mini_app/"))],
-        [InlineKeyboardButton("📈 حقيقية 24 - TradingView", callback_data="ALL_REAL"), InlineKeyboardButton("⚡ OTC 24 - PO", callback_data="ALL_OTC")]]
-    await update.message.reply_text("🤖 **MAD-BOT-SIG**\n✅ حقيقية: TradingView\n✅ OTC: آخر شمعة PO + اندفاع\n✅ نفس aitradeforge_bot", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+        [InlineKeyboardButton("📈 حقيقية 24", callback_data="ALL_REAL"), InlineKeyboardButton("⚡ OTC 24", callback_data="ALL_OTC")]]
+    await update.message.reply_text("🤖 **MAD-BOT-SIG**\n✅ حقيقية: TradingView\n✅ OTC: آخر شمعة PO\n✅ نفس aitradeforge_bot", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
 
 async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer(); d=q.data
@@ -79,10 +75,19 @@ async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if s: txt+=f"{f} {m} {'▲' if s=='CALL' else '▼'} {s} ⏰{e} {imp:.0f}%\n"
         await q.message.reply_text(txt); return
 
-def main():
-    print(f"🔒 PASSWORD مخفي: {'✅ موجود' if PASSWORD else '❌ مو موجود'}")
+def run_bot():
+    if not TOKEN:
+        print("❌ BOT_TOKEN مو موجود في Environment - حطه في Render > Environment")
+        return
+    print(f"🔒 BOT_TOKEN موجود: {TOKEN[:6]}... | PASSWORD: {'✅' if PASSWORD else '❌'}")
     app=Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start)); app.add_handler(CallbackQueryHandler(btn))
-    print("🤖 MAD-BOT-SIG يعمل - نفس aitradeforge_bot"); app.run_polling()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(btn))
+    print("🤖 MAD-BOT-SIG يعمل")
+    app.run_polling()
 
-if __name__=="__main__": main()
+if __name__=="__main__":
+    # شغل البوت في ثريد منفصل
+    threading.Thread(target=run_bot, daemon=True).start()
+    # شغل Flask عشان Render يشوف Port
+    app_flask.run(host="0.0.0.0", port=PORT)
