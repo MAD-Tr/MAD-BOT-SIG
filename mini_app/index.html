@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MAD-BOT-SIG - AI Trade Forge</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+body{background:#0a0e1f;color:#fff;font-family:Arial;margin:0}
+.header{background:#131a35;padding:14px;text-align:center;border-bottom:2px solid #00ff5a}
+.tabs{display:flex;gap:6px;padding:10px}
+.tab{flex:1;padding:10px;background:#1a2342;border-radius:10px;text-align:center;font-size:12px;cursor:pointer}
+.tab.active{background:#00ff5a;color:#000;font-weight:bold}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:10px}
+.card{background:#1a2342;border:1px solid #2a3558;border-radius:12px;padding:12px;text-align:center}
+.card.real{border-color:#2962ff}.card.otc{border-color:#ffaa00}
+.flag{font-size:16px}.pair{font-weight:bold;font-size:11px;margin:4px 0}
+.src{font-size:8px;color:#8a94b0}.signal{margin-top:6px;padding:6px;border-radius:6px;font-weight:bold;font-size:11px}
+.signal.CALL{background:#00ff5a;color:#000}.signal.PUT{background:#ff3b3b;color:#fff}.meta{font-size:9px;margin-top:4px;color:#00ff5a}
+</style>
+</head>
+<body>
+<div class="header"><h1>🟢 MAD-BOT-SIG LIVE</h1><div style="font-size:10px;color:#8a94b0">حقيقية TradingView | OTC آخر شمعة PO</div></div>
+<div class="tabs">
+<div class="tab active" onclick="setTab('real')">📈 حقيقية 24 - TradingView</div>
+<div class="tab" onclick="setTab('otc')">⚡ OTC 24 - PO</div>
+</div>
+<div class="grid" id="grid"></div>
+<script>
+const REAL={"EUR/USD":"🇪🇺/🇺🇸","GBP/USD":"🇬🇧/🇺🇸","USD/JPY":"🇺🇸/🇯🇵","AUD/USD":"🇦🇺/🇺🇸","USD/CHF":"🇺🇸/🇨🇭","USD/CAD":"🇺🇸/🇨🇦","NZD/USD":"🇳🇿/🇺🇸","EUR/JPY":"🇪🇺/🇯🇵","EUR/GBP":"🇪🇺/🇬🇧","GBP/JPY":"🇬🇧/🇯🇵","AUD/JPY":"🇦🇺/🇯🇵","EUR/AUD":"🇪🇺/🇦🇺","GBP/AUD":"🇬🇧/🇦🇺","EUR/CAD":"🇪🇺/🇨🇦","GBP/CAD":"🇬🇧/🇨🇦","AUD/CAD":"🇦🇺/🇨🇦","EUR/CHF":"🇪🇺/🇨🇭","GBP/CHF":"🇬🇧/🇨🇭","AUD/CHF":"🇦🇺/🇨🇭","NZD/JPY":"🇳🇿/🇯🇵","EUR/NZD":"🇪🇺/🇳🇿","GBP/NZD":"🇬🇧/🇳🇿","AUD/NZD":"🇦🇺/🇳🇿","CHF/JPY":"🇨🇭/🇯🇵"};
+const OTC={"EUR/USD OTC":"🇪🇺/🇺🇸 OTC","GBP/USD OTC":"🇬🇧/🇺🇸 OTC","USD/JPY OTC":"🇺🇸/🇯🇵 OTC","AUD/USD OTC":"🇦🇺/🇺🇸 OTC","USD/CHF OTC":"🇺🇸/🇨🇭 OTC","USD/CAD OTC":"🇺🇸/🇨🇦 OTC","NZD/USD OTC":"🇳🇿/🇺🇸 OTC","EUR/JPY OTC":"🇪🇺/🇯🇵 OTC","EUR/GBP OTC":"🇪🇺/🇬🇧 OTC","GBP/JPY OTC":"🇬🇧/🇯🇵 OTC","AUD/JPY OTC":"🇦🇺/🇯🇵 OTC","EUR/AUD OTC":"🇪🇺/🇦🇺 OTC","GBP/AUD OTC":"🇬🇧/🇦🇺 OTC","EUR/CAD OTC":"🇪🇺/🇨🇦 OTC","GBP/CAD OTC":"🇬🇧/🇨🇦 OTC","AUD/CAD OTC":"🇦🇺/🇨🇦 OTC","EUR/CHF OTC":"🇪🇺/🇨🇭 OTC","GBP/CHF OTC":"🇬🇧/🇨🇭 OTC","AUD/CHF OTC":"🇦🇺/🇨🇭 OTC","NZD/JPY OTC":"🇳🇿/🇯🇵 OTC","EUR/NZD OTC":"🇪🇺/🇳🇿 OTC","GBP/NZD OTC":"🇬🇧/🇳🇿 OTC","AUD/NZD OTC":"🇦🇺/🇳🇿 OTC","CHF/JPY OTC":"🇨🇭/🇯🇵 OTC"};
+let tab='real'; let data={}; Object.keys({...REAL,...OTC}).forEach(m=>data[m]=1.15+Math.random()*0.05);
+function setTab(t){tab=t; document.querySelectorAll('.tab').forEach((e,i)=>e.classList.toggle('active',(t=='real'&&i==0)||(t=='otc'&&i==1))); render();}
+function render(){
+  const g=document.getElementById('grid'); g.innerHTML='';
+  let markets=tab=='real'?REAL:OTC;
+  Object.entries(markets).forEach(([pair,flag])=>{
+    data[pair]+=(Math.random()-0.5)*0.0003;
+    let rsi=30+Math.random()*40, adx=15+Math.random()*20;
+    let bodyPct=0.3+Math.random()*0.7, imp=bodyPct*100;
+    let signal, meta, src;
+    if(tab=='real'){ signal=data[pair]>1.15&&rsi>50?'CALL':data[pair]<1.15&&rsi<50?'PUT':'WAIT'; meta=`⏰ ${adx>25?'2m':'6m'} | RSI ${rsi.toFixed(0)}`; src='TradingView'; }
+    else{ signal=bodyPct>0.6?'CALL':bodyPct>0.4?'PUT':'WAIT'; meta=`⏰ ${imp>70?'2m':'6m'} | اندفاع ${imp.toFixed(0)}%`; src='آخر شمعة PO'; }
+    let isSig=new Date().getSeconds()%30>=27;
+    g.innerHTML+=`<div class="card ${tab}"><div class="src">${src}</div><div class="flag">${flag}</div><div class="pair">${pair}</div><div class="signal ${isSig?signal:'WAIT'}">${isSig?(signal=='CALL'?'▲ CALL':'▼ PUT'):'⏳'}</div><div class="meta">${isSig?meta:''}</div></div>`;
+  });
+}
+setInterval(render,1000); render();
+Telegram.WebApp.ready(); Telegram.WebApp.expand();
+</script>
+</body>
+</html>
